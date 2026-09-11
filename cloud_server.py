@@ -38,6 +38,9 @@ SERVER_START_TIME = time.time()
 
 def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]:
     """Builds a rich status dictionary fully compatible with index.html Web Dashboard."""
+    if dev is None and coordinator.devices:
+        dev = next(iter(coordinator.devices.values()), None)
+
     if dev is None:
         # Return fallback status when no device connected yet
         uptime_sec = int(time.time() - SERVER_START_TIME)
@@ -84,6 +87,23 @@ def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]
     running_count = sum(1 for d in coordinator.devices.values() if d.status == "RUNNING")
     partner = coordinator.get_partner(dev.device_id)
 
+    all_devs = list(coordinator.devices.values())
+    s1 = dev
+    s2 = partner if partner else (all_devs[1] if len(all_devs) > 1 and all_devs[0].device_id == dev.device_id else (all_devs[0] if len(all_devs) > 1 and all_devs[1].device_id == dev.device_id else None))
+
+    combined_stats = {
+        "enabled": len(all_devs) >= 2 or partner is not None,
+        "partner_id": s2.device_id if s2 else None,
+        "partner_running": (s2.status == "RUNNING") if s2 else False,
+        "partner_stage": s2.current_stage if s2 else "IDLE",
+        "screen1_id": s1.device_id if s1 else None,
+        "screen1_running": (s1.status == "RUNNING") if s1 else False,
+        "screen1_stage": s1.current_stage if s1 else "IDLE",
+        "screen2_id": s2.device_id if s2 else None,
+        "screen2_running": (s2.status == "RUNNING") if s2 else False,
+        "screen2_stage": s2.current_stage if s2 else "IDLE",
+    }
+
     return {
         "device_id": dev.device_id,
         "is_running": dev.status == "RUNNING",
@@ -94,6 +114,7 @@ def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]
         "speed_mode": "Normal",
         "stagger_mode": True,
         "stagger_partner_id": partner.device_id if partner else None,
+        "combined_stats": combined_stats,
         "box_gap_seconds": 6.0,
         "box_pause_duration": 5.0,
         "first_box_second": dev.first_box_second,
@@ -149,7 +170,7 @@ async def get_boost_options():
 @app.post("/api/instances/{device_id}/settings/save")
 @app.post("/api/settings/save")
 async def save_instance_settings(device_id: Optional[str] = None, settings: Dict[str, Any] = None):
-    dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
+    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
     if dev and settings:
         dev.settings.update(settings)
         if dev.ws:
@@ -180,8 +201,10 @@ async def get_instances():
     for dev_id, dev in coordinator.devices.items():
         partner = coordinator.get_partner(dev_id)
         instances.append({
+            "id": dev_id,
             "device_id": dev_id,
             "name": dev.name,
+            "rounds": dev.rounds_played,
             "is_running": dev.status == "RUNNING",
             "current_stage": dev.current_stage,
             "rounds_played": dev.rounds_played,
@@ -196,6 +219,8 @@ async def get_instances():
 @app.get("/api/instances/{device_id}/status")
 async def get_instance_status(device_id: str):
     dev = coordinator.devices.get(device_id)
+    if dev is None and (device_id in ("default", "none", "emulator-5554") or len(coordinator.devices) == 1):
+        dev = next(iter(coordinator.devices.values()), None)
     return format_status_dict(dev)
 
 
@@ -207,7 +232,7 @@ async def get_devices():
 @app.post("/api/instances/{device_id}/start")
 @app.post("/api/start")
 async def start_device(device_id: Optional[str] = None):
-    dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
+    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "all", "none")) else next(iter(coordinator.devices.values()), None)
     if dev and dev.ws:
         await dev.ws.send_json({"type": "COMMAND", "command": "START"})
         dev.status = "RUNNING"
@@ -218,12 +243,24 @@ async def start_device(device_id: Optional[str] = None):
 @app.post("/api/instances/{device_id}/stop")
 @app.post("/api/stop")
 async def stop_device(device_id: Optional[str] = None):
-    dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
-    if dev and dev.ws:
-        await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
+    target_devs = []
+    if device_id and device_id not in ("default", "all", "none") and device_id in coordinator.devices:
+        target_devs.append(coordinator.devices[device_id])
+    else:
+        # If default or unspecified, stop all active devices
+        target_devs = list(coordinator.devices.values())
+
+    count = 0
+    for dev in target_devs:
+        if dev.ws:
+            try:
+                await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
+            except Exception:
+                pass
         dev.status = "IDLE"
-        return {"status": "ok", "message": f"Stopped {dev.device_id}"}
-    return {"status": "error", "message": "Device not connected"}
+        dev.is_in_game = False
+        count += 1
+    return {"status": "ok", "message": f"Stopped {count} device(s)"}
 
 
 @app.post("/api/instances/start-all")
@@ -242,10 +279,29 @@ async def stop_all_devices():
     count = 0
     for dev in coordinator.devices.values():
         if dev.ws:
-            await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
-            dev.status = "IDLE"
-            count += 1
+            try:
+                await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
+            except Exception:
+                pass
+        dev.status = "IDLE"
+        dev.is_in_game = False
+        count += 1
     return {"status": "ok", "stopped_count": count}
+
+
+class TapRequest(BaseModel):
+    x: int
+    y: int
+
+
+@app.post("/api/instances/{device_id}/tap")
+@app.post("/api/tap")
+async def tap_instance_endpoint(device_id: Optional[str] = None, req: Optional[TapRequest] = None):
+    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
+    if dev and dev.ws and req:
+        await dev.ws.send_json({"type": "COMMAND", "command": "TAP", "x": req.x, "y": req.y})
+        return {"success": True, "message": f"Tapped ({req.x}, {req.y}) on {dev.device_id}"}
+    return {"success": False, "message": "Device not connected"}
 
 
 @app.post("/api/instances/{device_id}/reset-app")
@@ -258,10 +314,11 @@ async def reset_app_endpoint(device_id: Optional[str] = None):
     return {"status": "error", "message": "Device not connected"}
 
 
+@app.get("/api/frame")
 @app.get("/api/instances/{device_id}/frame")
 @app.get("/api/device/{device_id}/frame")
-async def get_device_frame(device_id: str):
-    dev = coordinator.devices.get(device_id)
+async def get_device_frame(device_id: Optional[str] = None):
+    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
     if not dev or not dev.latest_frame_bytes:
         raise HTTPException(status_code=404, detail="No frame available")
     return Response(content=dev.latest_frame_bytes, media_type="image/jpeg")
@@ -271,7 +328,7 @@ async def frame_stream_generator(device_id: Optional[str] = None):
     """Yields MJPEG stream from latest frames received from Redfinger."""
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
     while True:
-        dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
+        dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
         if dev and dev.latest_frame_bytes:
             yield boundary + dev.latest_frame_bytes + b"\r\n"
         await asyncio.sleep(0.5)
@@ -363,14 +420,16 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
 
 @app.get("/")
 async def serve_dashboard():
-    index_file = os.path.join(WEB_DIR, "index.html")
-    if os.path.exists(index_file):
-        return FileResponse(index_file)
-    return HTMLResponse("<h2>CookieRun Cloud Server is Running. Place web files in /web directory.</h2>")
+    for p in [os.path.join(WEB_DIR, "index.html"), os.path.join(BASE_DIR, "index.html")]:
+        if os.path.exists(p):
+            return FileResponse(p)
+    return HTMLResponse("<h2>CookieRun Cloud Server is Running. Place web files in /web directory or root.</h2>")
 
 
 if os.path.exists(WEB_DIR):
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+elif os.path.exists(BASE_DIR):
+    app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 
 if __name__ == "__main__":
