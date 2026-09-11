@@ -1258,7 +1258,17 @@
         const res = await fetch('/api/instances');
         if (!res.ok) return;
         const data = await res.json();
-        instancesList = data.instances || [];
+        instancesList = (data.instances || []).map((inst, idx) => {
+          const did = inst.id || inst.device_id || `device-${idx + 1}`;
+          return {
+            ...inst,
+            id: did,
+            device_id: did,
+            name: inst.name || did,
+            rounds: inst.rounds !== undefined ? inst.rounds : (inst.rounds_played || 0),
+            is_running: inst.is_running !== undefined ? inst.is_running : (inst.status === 'RUNNING')
+          };
+        });
 
         // Update badge count
         const badge = document.getElementById('instance-count-badge');
@@ -1336,20 +1346,15 @@
         }
       }
 
-      // If exactly 2 devices connected and both have stagger mode on
-      if (!p1 && instancesList.length === 2) {
-        if (instancesList[0].stagger_mode && instancesList[1].stagger_mode) {
-          p1 = instancesList[0];
-          p2 = instancesList[1];
-        }
+      // If at least 2 devices connected, pair the first two devices!
+      if (!p1 && instancesList.length >= 2) {
+        p1 = instancesList[0];
+        p2 = instancesList[1];
       }
 
       if (p1 && p2 && p1.id !== p2.id) {
-        // Consistently pick Screen 1 (e.g. 5554) and Screen 2 (e.g. 5556)
         let s1 = p1, s2 = p2;
-        if (String(p2.id).includes('5554')) {
-          s1 = p2; s2 = p1;
-        } else if (!String(p1.id).includes('5554') && String(p1.id) > String(p2.id)) {
+        if (String(p2.id).includes('5554') || String(p2.id).includes('01')) {
           s1 = p2; s2 = p1;
         }
         return { s1: s1.id, s2: s2.id, s1_inst: s1, s2_inst: s2 };
@@ -1373,8 +1378,7 @@
       const pairInfo = getPairedDeviceGroup();
 
       if (pairInfo) {
-        // Paired mode active: Merge Screen 1 and Screen 2 into ONE combined tab!
-        const isPairedSelected = isPairedView || (currentDeviceId === pairInfo.s1 || currentDeviceId === pairInfo.s2);
+        // Paired mode: Render Dual-View button + Screen 1 button + Screen 2 button!
         const s1 = pairInfo.s1_inst;
         const s2 = pairInfo.s2_inst;
         const isAnyRun = s1.is_running || s2.is_running;
@@ -1386,18 +1390,16 @@
 
         const totalRounds = (s1.rounds || 0) + (s2.rounds || 0);
 
+        // 1. Dual View Tab
         const pairBtn = document.createElement('button');
-        pairBtn.className = isPairedSelected
+        pairBtn.className = isPairedView
           ? 'px-3.5 py-1.5 rounded-xl border border-indigo-500 bg-gradient-to-r from-indigo-500/25 via-purple-500/15 to-amber-500/15 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition active:scale-95'
           : 'px-3.5 py-1.5 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-300 hover:text-white hover:border-indigo-500/60 text-xs font-medium flex items-center gap-2 transition active:scale-95';
 
         pairBtn.innerHTML = `
           <span class="${dotClass}"></span>
           <span class="font-bold flex items-center gap-1">
-            <span>🔗 โหมดคู่หู:</span>
-            <span class="text-indigo-300 font-mono">จอ 1 (${escapeHtml(pairInfo.s1)})</span>
-            <span class="text-slate-500">+</span>
-            <span class="text-purple-300 font-mono">จอ 2 (${escapeHtml(pairInfo.s2)})</span>
+            <span>🔗 โหมดคู่หู 2 จอ</span>
           </span>
           <span class="text-[10px] opacity-90 font-mono px-1.5 py-0.5 rounded bg-indigo-950/80 border border-indigo-500/30 text-indigo-200">
             R${totalRounds} (รวม)
@@ -1405,6 +1407,36 @@
         `;
         pairBtn.onclick = () => selectPairedTab(pairInfo.s1, pairInfo.s2);
         container.appendChild(pairBtn);
+
+        // 2. Screen 1 Individual Tab
+        const isS1Selected = !isPairedView && currentDeviceId === pairInfo.s1;
+        const s1Btn = document.createElement('button');
+        s1Btn.className = isS1Selected
+          ? 'px-3.5 py-1.5 rounded-xl border border-indigo-500 bg-indigo-500/20 text-indigo-200 text-xs font-semibold flex items-center gap-2 shadow-md transition active:scale-95'
+          : 'px-3.5 py-1.5 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-300 hover:text-white hover:border-slate-600 text-xs font-medium flex items-center gap-2 transition active:scale-95';
+        const dot1 = s1.is_running ? 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse' : 'w-2 h-2 rounded-full bg-slate-500';
+        s1Btn.innerHTML = `
+          <span class="${dot1}"></span>
+          <span class="font-medium">จอ 1: <strong class="font-mono text-indigo-300">${escapeHtml(pairInfo.s1)}</strong></span>
+          <span class="text-[10px] opacity-80 font-mono px-1.5 py-0.2 rounded bg-slate-800/80">R${s1.rounds || 0}</span>
+        `;
+        s1Btn.onclick = () => selectInstance(pairInfo.s1);
+        container.appendChild(s1Btn);
+
+        // 3. Screen 2 Individual Tab
+        const isS2Selected = !isPairedView && currentDeviceId === pairInfo.s2;
+        const s2Btn = document.createElement('button');
+        s2Btn.className = isS2Selected
+          ? 'px-3.5 py-1.5 rounded-xl border border-purple-500 bg-purple-500/20 text-purple-200 text-xs font-semibold flex items-center gap-2 shadow-md transition active:scale-95'
+          : 'px-3.5 py-1.5 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-300 hover:text-white hover:border-slate-600 text-xs font-medium flex items-center gap-2 transition active:scale-95';
+        const dot2 = s2.is_running ? 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse' : 'w-2 h-2 rounded-full bg-slate-500';
+        s2Btn.innerHTML = `
+          <span class="${dot2}"></span>
+          <span class="font-medium">จอ 2: <strong class="font-mono text-purple-300">${escapeHtml(pairInfo.s2)}</strong></span>
+          <span class="text-[10px] opacity-80 font-mono px-1.5 py-0.2 rounded bg-slate-800/80">R${s2.rounds || 0}</span>
+        `;
+        s2Btn.onclick = () => selectInstance(pairInfo.s2);
+        container.appendChild(s2Btn);
 
         // Any remaining standalone instance (e.g. 3rd screen)
         instancesList.forEach(inst => {
@@ -1843,40 +1875,23 @@
 
     async function toggleBot() {
       const btn = document.getElementById('btn-toggle-bot');
-      btn.disabled = true;
       const targetId = currentDeviceId || 'default';
       const isPaired2Screens = (lastStatusData && lastStatusData.combined_stats && lastStatusData.combined_stats.enabled) || !!document.getElementById('cfg-stagger-mode')?.checked || (instancesList && instancesList.length >= 2);
       const isAnyRunning = isRunning || (lastStatusData && lastStatusData.combined_stats && lastStatusData.combined_stats.enabled && lastStatusData.combined_stats.partner_running) || (lastStatusData && !!lastStatusData.is_any_running);
+      const isStopAction = (btn && btn.textContent && btn.textContent.includes('หยุด')) || isAnyRunning;
 
-      if (!isAnyRunning) {
-        stopRequestedUntil = 0;
-        const payload = getFormSettingsPayload();
-        try {
-          if (isPaired2Screens && instancesList && instancesList.length >= 2) {
-            await saveBotSettingsAuto();
-            const res = await fetch('/api/instances/start-all', { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || data.message);
-          } else {
-            const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/start`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || data.message);
-          }
-        } catch (e) {
-          alert('❌ เริ่มต้นบอทไม่สำเร็จ: ' + e.message);
-        }
-      } else {
+      if (isStopAction) {
         // --- INSTANT OPTIMISTIC UI STOP (0ms latency) ---
-        stopRequestedUntil = Date.now() + 4000;
+        stopRequestedUntil = Date.now() + 6000;
         isRunning = false;
         if (lastStatusData) {
           lastStatusData.is_running = false;
           lastStatusData.is_any_running = false;
-          if (lastStatusData.combined_stats) lastStatusData.combined_stats.partner_running = false;
+          if (lastStatusData.combined_stats) {
+            lastStatusData.combined_stats.partner_running = false;
+            lastStatusData.combined_stats.screen1_running = false;
+            lastStatusData.combined_stats.screen2_running = false;
+          }
         }
         btn.className = "w-full py-4 px-6 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-white shadow-emerald-500/25";
         btn.innerHTML = `<span class="text-2xl">▶</span><span>เริ่มทำงานบอท (${escapeHtml(targetId)})</span>`;
@@ -1893,15 +1908,43 @@
         }
         btn.disabled = false;
 
-        // Send network stop requests in background without blocking UI
+        // Send network stop requests in background
         try {
           fetch('/api/instances/stop-all', { method: 'POST' }).catch(() => {});
           fetch(`/api/instances/${encodeURIComponent(targetId)}/stop`, { method: 'POST' }).catch(() => {});
+          fetch('/api/stop', { method: 'POST' }).catch(() => {});
         } catch (e) {}
+
+        setTimeout(async () => {
+          await refreshDevices(true);
+          await fetchStatus();
+        }, 800);
         return;
       }
 
-      btn.disabled = false;
+      btn.disabled = true;
+      stopRequestedUntil = 0;
+      const payload = getFormSettingsPayload();
+      try {
+        if (isPaired2Screens && instancesList && instancesList.length >= 2) {
+          await saveBotSettingsAuto();
+          const res = await fetch('/api/instances/start-all', { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || data.message);
+        } else {
+          const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || data.message);
+        }
+      } catch (e) {
+        alert('❌ เริ่มต้นบอทไม่สำเร็จ: ' + e.message);
+      } finally {
+        btn.disabled = false;
+      }
       await fetchStatus();
       await refreshDevices(true);
     }
@@ -2236,10 +2279,10 @@
 
         const pairInfo = getPairedDeviceGroup();
         const hasStaggerConfig = !!document.getElementById('cfg-stagger-mode')?.checked;
-        const isStaggerPaired = !!pairInfo && hasStaggerConfig && !!(data.combined_stats && data.combined_stats.enabled);
-        const shouldShowDualView = isStaggerPaired && isPairedView;
-        const partnerDevId = (data.combined_stats && data.combined_stats.enabled) ? data.combined_stats.partner_id : null;
-        const partnerIsRunning = data.combined_stats && data.combined_stats.enabled && data.combined_stats.partner_running;
+        const isStaggerPaired = !!pairInfo && (hasStaggerConfig || (instancesList && instancesList.length >= 2) || !!(data.combined_stats && data.combined_stats.enabled));
+        const shouldShowDualView = isPairedView && (isStaggerPaired || !!pairInfo);
+        const partnerDevId = (data.combined_stats && data.combined_stats.partner_id) || (pairInfo ? (pairInfo.s1 === targetId ? pairInfo.s2 : pairInfo.s1) : null);
+        const partnerIsRunning = (data.combined_stats && data.combined_stats.partner_running) || (instancesList && instancesList.find(i => i.id === partnerDevId)?.is_running);
         const isFarmRunning = isRunning || (shouldShowDualView && partnerIsRunning) || !!data.is_any_running;
 
         const hBtn = document.getElementById('btn-header-toggle-bot');
