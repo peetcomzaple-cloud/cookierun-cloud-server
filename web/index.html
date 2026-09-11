@@ -1226,6 +1226,7 @@
 
   <script>
     let isRunning = false;
+    let stopRequestedUntil = 0;
     let ws = null;
     let currentDeviceId = '';
     let instancesList = [];
@@ -1848,6 +1849,7 @@
       const isAnyRunning = isRunning || (lastStatusData && lastStatusData.combined_stats && lastStatusData.combined_stats.enabled && lastStatusData.combined_stats.partner_running) || (lastStatusData && !!lastStatusData.is_any_running);
 
       if (!isAnyRunning) {
+        stopRequestedUntil = 0;
         const payload = getFormSettingsPayload();
         try {
           if (isPaired2Screens && instancesList && instancesList.length >= 2) {
@@ -1868,19 +1870,35 @@
           alert('❌ เริ่มต้นบอทไม่สำเร็จ: ' + e.message);
         }
       } else {
-        try {
-          if (isPaired2Screens || (lastStatusData && lastStatusData.running_instances_count > 1)) {
-            const res = await fetch('/api/instances/stop-all', { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || data.message);
-          } else {
-            const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/stop`, { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || data.message);
-          }
-        } catch (e) {
-          alert('❌ หยุดบอทไม่สำเร็จ: ' + e.message);
+        // --- INSTANT OPTIMISTIC UI STOP (0ms latency) ---
+        stopRequestedUntil = Date.now() + 4000;
+        isRunning = false;
+        if (lastStatusData) {
+          lastStatusData.is_running = false;
+          lastStatusData.is_any_running = false;
+          if (lastStatusData.combined_stats) lastStatusData.combined_stats.partner_running = false;
         }
+        btn.className = "w-full py-4 px-6 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-white shadow-emerald-500/25";
+        btn.innerHTML = `<span class="text-2xl">▶</span><span>เริ่มทำงานบอท (${escapeHtml(targetId)})</span>`;
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const statusPill = document.getElementById('status-pill');
+        if (statusDot) statusDot.className = "w-2.5 h-2.5 rounded-full bg-slate-500";
+        if (statusText) statusText.textContent = `Idle (Stopped)`;
+        if (statusPill) statusPill.className = "flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs font-medium text-slate-300";
+        const hBtn = document.getElementById('btn-header-toggle-bot');
+        if (hBtn) {
+          hBtn.className = "px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all duration-200 shadow bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white shadow-emerald-500/20";
+          hBtn.innerHTML = `<span>▶</span><span>เริ่มบอท</span>`;
+        }
+        btn.disabled = false;
+
+        // Send network stop requests in background without blocking UI
+        try {
+          fetch('/api/instances/stop-all', { method: 'POST' }).catch(() => {});
+          fetch(`/api/instances/${encodeURIComponent(targetId)}/stop`, { method: 'POST' }).catch(() => {});
+        } catch (e) {}
+        return;
       }
 
       btn.disabled = false;
@@ -2197,8 +2215,14 @@
       try {
         const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/status`);
         const data = await res.json();
-        lastStatusData = data;
 
+        if (Date.now() < stopRequestedUntil) {
+          data.is_running = false;
+          data.is_any_running = false;
+          if (data.combined_stats) data.combined_stats.partner_running = false;
+        }
+
+        lastStatusData = data;
         isRunning = data.is_running;
 
         const btn = document.getElementById('btn-toggle-bot');
