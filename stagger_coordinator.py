@@ -31,6 +31,7 @@ class CloudDeviceState:
         self.ws = None
         self.latest_frame_bytes: Optional[bytes] = None
         self.round_history: List[Dict[str, Any]] = []
+        self.settings: Dict[str, Any] = {}
 
     def to_dict(self) -> Dict[str, Any]:
         return {

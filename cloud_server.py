@@ -126,6 +126,38 @@ class ActionRequest(BaseModel):
     room_id: Optional[str] = "default_pair"
 
 
+BOOST_OPTIONS = [
+    {"id": "double_coins", "name": "เหรียญ x2 (Double Coins)", "template": "BOOST_DOUBLE_COINS_1.png"},
+    {"id": "coin_magic", "name": "เปลี่ยนสิ่งกีดขวางเป็นเหรียญทอง (Coin Magic)", "template": "BOOST_GOLD_COIN_MAGIC_1.png"},
+    {"id": "magnetic_aura", "name": "พลังแม่เหล็ก (Magnetic Aura)", "template": "BOOST_MAGNETIC_AURA_1.png"},
+    {"id": "score_bonus", "name": "คะแนนโบนัส +15% (Score Bonus)", "template": "BOOST_15P_SCORE_BONUS_1.png"},
+    {"id": "base_speed", "name": "ความเร็วพื้นฐาน +17% (Base Speed)", "template": "BOOST_17P_BASE_SPEED_1.png"},
+    {"id": "hp_drain", "name": "พลังชีวิตลดช้าลง 15% (HP Drain)", "template": "BOOST_M15P_HP_DRAIN_1.png"},
+    {"id": "revive_80hp", "name": "ฟื้นคืนชีพ 1 ครั้งด้วย 80HP (Revive)", "template": "BOOST_REVIVE_ONCE_WITH_80HP_1.png"},
+    {"id": "crush_chance", "name": "โอกาสทำลายสิ่งกีดขวาง 70% (Crush Chance)", "template": "BOOST_70P_CRUSH_CHANCE_1.png"},
+    {"id": "hp_potions", "name": "ฟื้นฟู HP จากขวดยา +20% (HP from Potions)", "template": "BOOST_20P_HP_FROM_POTIONS_1.png"},
+    {"id": "collision_damage", "name": "ความเสียหายจากการชนลดลง 30% (Collision Damage)", "template": "BOOST_M30P_COLLISION_DAMAGE_1.png"},
+    {"id": "pit_lifts", "name": "ช่วยตกหลุม 2 ครั้ง (Pit Lifts)", "template": "BOOST_2PIT_LIFTS_1.png"},
+]
+
+
+@app.get("/api/boosts")
+async def get_boost_options():
+    return BOOST_OPTIONS
+
+
+@app.post("/api/instances/{device_id}/settings/save")
+@app.post("/api/settings/save")
+async def save_instance_settings(device_id: Optional[str] = None, settings: Dict[str, Any] = None):
+    dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
+    if dev and settings:
+        dev.settings.update(settings)
+        if dev.ws:
+            await dev.ws.send_json({"type": "SETTINGS_UPDATE", "settings": dev.settings})
+        return {"status": "ok", "settings": dev.settings}
+    return {"status": "error", "message": "Device not found or empty settings"}
+
+
 @app.get("/api/pc-status")
 @app.get("/api/heartbeat")
 @app.get("/api/ping")
@@ -216,6 +248,16 @@ async def stop_all_devices():
     return {"status": "ok", "stopped_count": count}
 
 
+@app.post("/api/instances/{device_id}/reset-app")
+@app.post("/api/reset-app")
+async def reset_app_endpoint(device_id: Optional[str] = None):
+    dev = coordinator.devices.get(device_id) if device_id else next(iter(coordinator.devices.values()), None)
+    if dev and dev.ws:
+        await dev.ws.send_json({"type": "COMMAND", "command": "RESET_APP"})
+        return {"status": "ok", "message": f"Sent RESET_APP to {dev.device_id}"}
+    return {"status": "error", "message": "Device not connected"}
+
+
 @app.get("/api/instances/{device_id}/frame")
 @app.get("/api/device/{device_id}/frame")
 async def get_device_frame(device_id: str):
@@ -249,6 +291,8 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
     await websocket.accept()
     dev = coordinator.register_device(device_id, room_id, websocket)
     print(f"📱 [CloudHub] Device connected: {device_id} in room: {room_id}")
+    if dev.settings:
+        await websocket.send_json({"type": "CONFIG", "settings": dev.settings})
 
     try:
         while True:
@@ -331,8 +375,9 @@ if os.path.exists(WEB_DIR):
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.environ.get("PORT", 8080))
     print("=" * 60)
     print("🍪 CookieRun Cloud Bot - Central Hub & Stagger Server")
-    print("🚀 Server running on: http://0.0.0.0:8000")
+    print(f"🚀 Server running on: http://0.0.0.0:{port}")
     print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
