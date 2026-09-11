@@ -450,6 +450,11 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                 if sync_msg:
                     print(sync_msg)
 
+            elif mtype == "CAPTCHA_SOLVED":
+                odd_cards = msg.get("odd_cards", [])
+                print(f"🛡️ [{device_id}] Anti-Bot Captcha SOLVED successfully! Tapped cards: {odd_cards}")
+                dev.current_stage = f"CAPTCHA แก้ไขสำเร็จ! (การ์ด {odd_cards})"
+
             elif mtype == "ROUND_COMPLETE":
                 dev.is_in_game = False
                 coins = int(msg.get("coins", 0))
