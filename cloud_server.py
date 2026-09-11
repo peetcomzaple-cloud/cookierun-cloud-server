@@ -83,34 +83,39 @@ def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]
 
     uptime_sec = int(time.time() - SERVER_START_TIME)
     h, m, s = uptime_sec // 3600, (uptime_sec % 3600) // 60, uptime_sec % 60
-    coins_per_hr = int(dev.session_coins / max(0.001, uptime_sec / 3600)) if (dev.status == "RUNNING" and uptime_sec > 5) else 0
-    running_count = sum(1 for d in coordinator.devices.values() if d.status == "RUNNING")
+    running_count = sum(1 for d in coordinator.devices.values() if d.status == "RUNNING" and not getattr(d, "is_user_stopped", False))
     partner = coordinator.get_partner(dev.device_id)
 
     all_devs = list(coordinator.devices.values())
     s1 = dev
     s2 = partner if partner else (all_devs[1] if len(all_devs) > 1 and all_devs[0].device_id == dev.device_id else (all_devs[0] if len(all_devs) > 1 and all_devs[1].device_id == dev.device_id else None))
 
+    is_dev_running = (dev.status == "RUNNING") and not getattr(dev, "is_user_stopped", False)
+    coins_per_hr = int(dev.session_coins / max(0.001, uptime_sec / 3600)) if (is_dev_running and uptime_sec > 5) else 0
+
+    s1_running = (s1.status == "RUNNING" and not getattr(s1, "is_user_stopped", False)) if s1 else False
+    s2_running = (s2.status == "RUNNING" and not getattr(s2, "is_user_stopped", False)) if s2 else False
+
     combined_stats = {
         "enabled": len(all_devs) >= 2 or partner is not None,
         "partner_id": s2.device_id if s2 else None,
-        "partner_running": (s2.status == "RUNNING") if s2 else False,
-        "partner_stage": s2.current_stage if s2 else "IDLE",
+        "partner_running": s2_running,
+        "partner_stage": "IDLE (Stopped)" if (s2 and getattr(s2, "is_user_stopped", False)) else (s2.current_stage if s2 else "IDLE"),
         "screen1_id": s1.device_id if s1 else None,
-        "screen1_running": (s1.status == "RUNNING") if s1 else False,
-        "screen1_stage": s1.current_stage if s1 else "IDLE",
+        "screen1_running": s1_running,
+        "screen1_stage": "IDLE (Stopped)" if (s1 and getattr(s1, "is_user_stopped", False)) else (s1.current_stage if s1 else "IDLE"),
         "screen2_id": s2.device_id if s2 else None,
-        "screen2_running": (s2.status == "RUNNING") if s2 else False,
-        "screen2_stage": s2.current_stage if s2 else "IDLE",
+        "screen2_running": s2_running,
+        "screen2_stage": "IDLE (Stopped)" if (s2 and getattr(s2, "is_user_stopped", False)) else (s2.current_stage if s2 else "IDLE"),
     }
 
     return {
         "device_id": dev.device_id,
-        "is_running": dev.status == "RUNNING",
+        "is_running": is_dev_running,
         "status": "online",
         "online": True,
         "is_online": True,
-        "current_stage": dev.current_stage,
+        "current_stage": "IDLE (Stopped)" if getattr(dev, "is_user_stopped", False) else dev.current_stage,
         "speed_mode": "Normal",
         "stagger_mode": True,
         "stagger_partner_id": partner.device_id if partner else None,
@@ -119,7 +124,7 @@ def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]
         "box_pause_duration": 5.0,
         "first_box_second": dev.first_box_second,
         "has_paused_for_box": dev.has_paused_for_box,
-        "is_in_game": dev.is_in_game,
+        "is_in_game": False if getattr(dev, "is_user_stopped", False) else dev.is_in_game,
         "uptime": f"{h:02d}:{m:02d}:{s:02d}",
         "rounds_played": dev.rounds_played,
         "mystery_boxes": sum(dev.box_counts.values()),
@@ -200,18 +205,19 @@ async def get_instances():
     instances = []
     for dev_id, dev in coordinator.devices.items():
         partner = coordinator.get_partner(dev_id)
+        is_stopped = getattr(dev, "is_user_stopped", False)
         instances.append({
             "id": dev_id,
             "device_id": dev_id,
             "name": dev.name,
             "rounds": dev.rounds_played,
-            "is_running": dev.status == "RUNNING",
-            "current_stage": dev.current_stage,
+            "is_running": (dev.status == "RUNNING") and not is_stopped,
+            "current_stage": "IDLE (Stopped)" if is_stopped else dev.current_stage,
             "rounds_played": dev.rounds_played,
-            "is_in_game": dev.is_in_game,
+            "is_in_game": False if is_stopped else dev.is_in_game,
             "stagger_mode": True,
             "stagger_partner_id": partner.device_id if partner else None,
-            "status": dev.status
+            "status": "IDLE" if is_stopped else dev.status
         })
     return {"instances": instances, "active_device_id": next(iter(coordinator.devices.keys()), "")}
 
@@ -233,9 +239,14 @@ async def get_devices():
 @app.post("/api/start")
 async def start_device(device_id: Optional[str] = None):
     dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "all", "none")) else next(iter(coordinator.devices.values()), None)
-    if dev and dev.ws:
-        await dev.ws.send_json({"type": "COMMAND", "command": "START"})
+    if dev:
+        dev.is_user_stopped = False
         dev.status = "RUNNING"
+        if dev.ws:
+            try:
+                await dev.ws.send_json({"type": "COMMAND", "command": "START"})
+            except Exception:
+                pass
         return {"status": "ok", "message": f"Started {dev.device_id}"}
     return {"status": "error", "message": "Device not connected"}
 
@@ -252,13 +263,14 @@ async def stop_device(device_id: Optional[str] = None):
 
     count = 0
     for dev in target_devs:
+        dev.is_user_stopped = True
+        dev.status = "IDLE"
+        dev.is_in_game = False
         if dev.ws:
             try:
                 await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
             except Exception:
                 pass
-        dev.status = "IDLE"
-        dev.is_in_game = False
         count += 1
     return {"status": "ok", "message": f"Stopped {count} device(s)"}
 
@@ -267,10 +279,14 @@ async def stop_device(device_id: Optional[str] = None):
 async def start_all_devices():
     count = 0
     for dev in coordinator.devices.values():
+        dev.is_user_stopped = False
+        dev.status = "RUNNING"
         if dev.ws:
-            await dev.ws.send_json({"type": "COMMAND", "command": "START"})
-            dev.status = "RUNNING"
-            count += 1
+            try:
+                await dev.ws.send_json({"type": "COMMAND", "command": "START"})
+            except Exception:
+                pass
+        count += 1
     return {"status": "ok", "started_count": count}
 
 
@@ -278,13 +294,14 @@ async def start_all_devices():
 async def stop_all_devices():
     count = 0
     for dev in coordinator.devices.values():
+        dev.is_user_stopped = True
+        dev.status = "IDLE"
+        dev.is_in_game = False
         if dev.ws:
             try:
                 await dev.ws.send_json({"type": "COMMAND", "command": "STOP"})
             except Exception:
                 pass
-        dev.status = "IDLE"
-        dev.is_in_game = False
         count += 1
     return {"status": "ok", "stopped_count": count}
 
@@ -358,9 +375,16 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
             dev.last_heartbeat = time.time()
 
             if mtype == "HEARTBEAT":
-                dev.status = msg.get("status", dev.status)
-                dev.current_stage = msg.get("current_stage", dev.current_stage)
-                dev.is_in_game = msg.get("is_in_game", dev.is_in_game)
+                if getattr(dev, "is_user_stopped", False):
+                    dev.status = "IDLE"
+                    try:
+                        await websocket.send_json({"type": "COMMAND", "command": "STOP"})
+                    except Exception:
+                        pass
+                else:
+                    dev.status = msg.get("status", dev.status)
+                dev.current_stage = "IDLE (Stopped)" if getattr(dev, "is_user_stopped", False) else msg.get("current_stage", dev.current_stage)
+                dev.is_in_game = False if getattr(dev, "is_user_stopped", False) else msg.get("is_in_game", dev.is_in_game)
                 dev.rounds_played = msg.get("rounds_played", dev.rounds_played)
 
             elif mtype == "FRAME":
@@ -372,20 +396,36 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                         pass
 
             elif mtype == "CHECK_CAN_START":
-                can_start, reason = coordinator.check_can_start_round(device_id)
-                await websocket.send_json({
-                    "type": "CAN_START_RESPONSE",
-                    "can_start": can_start,
-                    "reason": reason
-                })
+                if getattr(dev, "is_user_stopped", False):
+                    await websocket.send_json({
+                        "type": "CAN_START_RESPONSE",
+                        "can_start": False,
+                        "reason": "บอทถูกสั่งหยุดทำงานจาก Web Dashboard"
+                    })
+                else:
+                    can_start, reason = coordinator.check_can_start_round(device_id)
+                    await websocket.send_json({
+                        "type": "CAN_START_RESPONSE",
+                        "can_start": can_start,
+                        "reason": reason
+                    })
 
             elif mtype == "ROUND_START":
-                dev.is_in_game = True
-                dev.in_run_start_time = time.time()
-                dev.first_box_second = 0.0
-                dev.has_paused_for_box = False
-                dev.rounds_played = msg.get("round", dev.rounds_played + 1)
-                print(f"🏁 [{device_id}] Round {dev.rounds_played} started!")
+                if getattr(dev, "is_user_stopped", False):
+                    dev.is_in_game = False
+                    dev.status = "IDLE"
+                    try:
+                        await websocket.send_json({"type": "COMMAND", "command": "STOP"})
+                    except Exception:
+                        pass
+                else:
+                    dev.is_in_game = True
+                    dev.in_run_start_time = time.time()
+                    dev.first_box_second = 0.0
+                    dev.first_box_wall_time = 0.0
+                    dev.has_paused_for_box = False
+                    dev.rounds_played = msg.get("round", dev.rounds_played + 1)
+                    print(f"🏁 [{device_id}] Round {dev.rounds_played} started!")
 
             elif mtype == "FIRST_BOX":
                 box_sec = float(msg.get("second", 0.0))

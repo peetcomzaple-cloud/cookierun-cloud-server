@@ -117,6 +117,7 @@ class StaggerCoordinator:
         """
         Called when a device collects the first mystery box.
         Evaluates whether partner device needs to execute an intentional pause.
+        Matches original PC bot algorithm: compares wall-clock timestamps of both runners.
         """
         dev = self.devices.get(device_id)
         if not dev:
@@ -129,21 +130,29 @@ class StaggerCoordinator:
         if not partner or not partner.is_in_game:
             return None
 
-        # Check if partner is also running and hasn't paused yet
-        if not partner.has_paused_for_box:
-            partner_elapsed = time.time() - partner.in_run_start_time if partner.in_run_start_time > 0 else 0
-            pause_duration = 5.0
-            partner.has_paused_for_box = True
-            msg = f"📦 [Stagger Sync] {dev.name} ดรอปกล่องแรกที่ {box_second:.1f}s -> ส่งคำสั่งให้ {partner.name} กด Pause ชะลอ {pause_duration}s!"
-            
-            # Send pause command to partner client
-            if partner.ws:
+        # Wait until both runners record their first box in this round
+        if partner.first_box_wall_time <= 0:
+            return f"📦 [First Box] {dev.name} เก็บกล่องแรกที่ {box_second:.1f}s — รอจอคู่หู ({partner.name}) เจอกล่องแรกเพื่อวัดระยะห่าง"
+
+        gap = abs(dev.first_box_wall_time - partner.first_box_wall_time)
+        threshold = 20.0
+        pause_duration = 10.0
+
+        if gap >= threshold:
+            return f"✅ [Anti-Collision] ระยะห่างกล่องแรกระหว่าง {dev.name} กับ {partner.name} = {gap:.1f}s (ปลอดภัย >= {threshold:.1f}s) — ไม่ต้องหยุดชะลอ"
+
+        # Gap is too close (< 20s)! Pause the slower runner (the one that collected the box second)
+        target = dev if dev.first_box_wall_time > partner.first_box_wall_time else partner
+        if not target.has_paused_for_box:
+            target.has_paused_for_box = True
+            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรกเพียง {gap:.1f}s (< {threshold:.1f}s) ใกล้กันเกินไป! สั่ง {target.name} กด Pause ชะลอ {pause_duration}s!"
+            if target.ws:
                 try:
-                    await partner.ws.send_json({
+                    await target.ws.send_json({
                         "type": "COMMAND",
                         "command": "STAGGER_PAUSE",
                         "duration": pause_duration,
-                        "reason": f"คู่หู ({dev.name}) เจอกล่องแรกที่วินาทีที่ {box_second:.1f}"
+                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป"
                     })
                 except Exception:
                     pass
