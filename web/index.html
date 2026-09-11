@@ -1964,18 +1964,22 @@
     }
 
     async function resetGameApp() {
-      if (!confirm(`ต้องการสั่งบังคับปิดและเปิดเกม CookieRun ใหม่บนจอ ${currentDeviceId} หรือไม่?`)) return;
+      const targetId = currentDeviceId || 'default';
+      if (!confirm(`ต้องการสั่งบังคับปิดและเปิดเกม CookieRun ใหม่บนจอ ${targetId} หรือไม่?`)) return;
       try {
-        await fetch('/api/reset-app', {
+        const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/reset-app`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            device_ip: currentDeviceId || document.getElementById('cfg-ip').value.trim(),
-            device_port: parseInt(document.getElementById('cfg-port').value) || 5556,
-          })
+          body: JSON.stringify({ device_id: targetId })
         });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`🔄 สั่งรีสตาร์ทเกมบน ${targetId} เรียบร้อยแล้ว`, 'success');
+        } else {
+          showToast(`❌ รีสตาร์ทไม่สำเร็จ: ${data.message || 'Error'}`, 'error');
+        }
       } catch (e) {
-        alert('เกิดข้อผิดพลาด: ' + e.message);
+        showToast('เกิดข้อผิดพลาด: ' + e.message, 'error');
       }
     }
 
