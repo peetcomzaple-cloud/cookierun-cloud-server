@@ -35,9 +35,35 @@
     }
   </script>
   <style>
-    body {
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
       background: radial-gradient(circle at 50% 0%, #141c2e 0%, #0d131f 45%, #080c14 100%);
       min-height: 100vh;
+      font-family: 'Prompt', 'Noto Sans Thai', 'Segoe UI', Tahoma, sans-serif !important;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.6;
+    }
+    /* Fix Thai tone marks and vowels clipping */
+    span, p, h1, h2, h3, h4, h5, h6, label, button, a, div, input, select {
+      line-height: 1.5;
+    }
+    .text-xs {
+      font-size: 0.75rem !important;
+      line-height: 1.25rem !important; /* 20px line-height prevents cutting off Thai tone marks */
+    }
+    .text-\[11px\] {
+      font-size: 11px !important;
+      line-height: 18px !important;
+    }
+    .text-sm {
+      font-size: 0.875rem !important;
+      line-height: 1.35rem !important;
+    }
+    label span, button span {
+      display: inline-block;
+      vertical-align: middle;
     }
     .custom-scrollbar::-webkit-scrollbar {
       width: 6px;
