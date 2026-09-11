@@ -267,7 +267,11 @@ async def start_device(device_id: Optional[str] = None):
 async def stop_device(device_id: Optional[str] = None):
     target_devs = []
     if device_id and device_id not in ("default", "all", "none") and device_id in coordinator.devices:
-        target_devs.append(coordinator.devices[device_id])
+        target_dev = coordinator.devices[device_id]
+        target_devs.append(target_dev)
+        partner = coordinator.get_partner(target_dev.device_id)
+        if partner and partner not in target_devs:
+            target_devs.append(partner)
     else:
         # If default or unspecified, stop all active devices
         target_devs = list(coordinator.devices.values())
@@ -378,6 +382,12 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
     print(f"📱 [CloudHub] Device connected: {device_id} in room: {room_id}")
     if dev.settings:
         await websocket.send_json({"type": "CONFIG", "settings": dev.settings})
+    # Ensure newly connected device stays in IDLE until user clicks START on Web Dashboard
+    if getattr(dev, "is_user_stopped", True):
+        try:
+            await websocket.send_json({"type": "COMMAND", "command": "STOP"})
+        except Exception:
+            pass
 
     try:
         while True:

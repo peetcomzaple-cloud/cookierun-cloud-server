@@ -13,9 +13,10 @@ class CloudDeviceState:
         self.device_id = device_id
         self.room_id = room_id
         self.name = device_id
-        self.status = "CONNECTED"          # CONNECTED, IDLE, IN_GAME, PAUSED, DISCONNECTED
+        self.status = "IDLE"               # IDLE, RUNNING, IN_GAME, PAUSED, DISCONNECTED
+        self.is_user_stopped = True        # Default to True: Wait for user to manually click Start on Web Dashboard!
         self.is_in_game = False
-        self.current_stage = "IDLE"
+        self.current_stage = "IDLE (Stopped)"
         self.rounds_played = 0
         self.in_run_start_time = 0.0
         self.first_box_second = 0.0
@@ -38,9 +39,9 @@ class CloudDeviceState:
             "device_id": self.device_id,
             "room_id": self.room_id,
             "name": self.name,
-            "status": self.status,
-            "is_in_game": self.is_in_game,
-            "current_stage": self.current_stage,
+            "status": "IDLE" if getattr(self, "is_user_stopped", True) else self.status,
+            "is_in_game": False if getattr(self, "is_user_stopped", True) else self.is_in_game,
+            "current_stage": "IDLE (Stopped)" if getattr(self, "is_user_stopped", True) else self.current_stage,
             "rounds_played": self.rounds_played,
             "first_box_second": self.first_box_second,
             "session_coins": self.session_coins,
@@ -68,7 +69,11 @@ class StaggerCoordinator:
         dev.room_id = room_id
         dev.ws = ws
         dev.last_heartbeat = time.time()
-        dev.status = "CONNECTED"
+        if getattr(dev, "is_user_stopped", True):
+            dev.status = "IDLE"
+            dev.is_in_game = False
+        else:
+            dev.status = "RUNNING"
 
         if room_id not in self.rooms:
             self.rooms[room_id] = []
