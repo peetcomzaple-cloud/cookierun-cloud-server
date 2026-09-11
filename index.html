@@ -1926,7 +1926,7 @@
       stopRequestedUntil = 0;
       const payload = getFormSettingsPayload();
       try {
-        if (isPaired2Screens && instancesList && instancesList.length >= 2) {
+        if (isPaired2Screens || (instancesList && instancesList.length >= 2)) {
           await saveBotSettingsAuto();
           const res = await fetch('/api/instances/start-all', { method: 'POST' });
           const data = await res.json();

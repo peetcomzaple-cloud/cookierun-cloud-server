@@ -238,8 +238,19 @@ async def get_devices():
 @app.post("/api/instances/{device_id}/start")
 @app.post("/api/start")
 async def start_device(device_id: Optional[str] = None):
-    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "all", "none")) else next(iter(coordinator.devices.values()), None)
-    if dev:
+    target_devs = []
+    if device_id and device_id not in ("default", "all", "none") and device_id in coordinator.devices:
+        target_dev = coordinator.devices[device_id]
+        target_devs.append(target_dev)
+        # If partner exists in room, start partner too so both screens run together!
+        partner = coordinator.get_partner(target_dev.device_id)
+        if partner and partner not in target_devs:
+            target_devs.append(partner)
+    else:
+        target_devs = list(coordinator.devices.values())
+
+    count = 0
+    for dev in target_devs:
         dev.is_user_stopped = False
         dev.status = "RUNNING"
         if dev.ws:
@@ -247,8 +258,8 @@ async def start_device(device_id: Optional[str] = None):
                 await dev.ws.send_json({"type": "COMMAND", "command": "START"})
             except Exception:
                 pass
-        return {"status": "ok", "message": f"Started {dev.device_id}"}
-    return {"status": "error", "message": "Device not connected"}
+        count += 1
+    return {"status": "ok", "message": f"Started {count} device(s)"}
 
 
 @app.post("/api/instances/{device_id}/stop")
@@ -377,10 +388,6 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
             if mtype == "HEARTBEAT":
                 if getattr(dev, "is_user_stopped", False):
                     dev.status = "IDLE"
-                    try:
-                        await websocket.send_json({"type": "COMMAND", "command": "STOP"})
-                    except Exception:
-                        pass
                 else:
                     dev.status = msg.get("status", dev.status)
                 dev.current_stage = "IDLE (Stopped)" if getattr(dev, "is_user_stopped", False) else msg.get("current_stage", dev.current_stage)
