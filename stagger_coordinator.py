@@ -82,11 +82,41 @@ class StaggerCoordinator:
 
         return dev
 
-    def unregister_device(self, device_id: str):
+    def remove_device(self, device_id: str):
+        """Completely removes a device from registry and room assignments."""
         if device_id in self.devices:
             dev = self.devices[device_id]
-            dev.status = "DISCONNECTED"
-            dev.ws = None
+            del self.devices[device_id]
+            if dev.room_id in self.rooms:
+                if device_id in self.rooms[dev.room_id]:
+                    self.rooms[dev.room_id].remove(device_id)
+                if not self.rooms[dev.room_id]:
+                    del self.rooms[dev.room_id]
+
+    def unregister_device(self, device_id: str):
+        """Called when WebSocket closes. Immediately purges disconnected device."""
+        self.remove_device(device_id)
+
+    def cleanup_stale_devices(self, max_stale_seconds: float = 15.0) -> List[str]:
+        """
+        Auto-prunes any devices that disconnected or haven't sent a heartbeat for > max_stale_seconds.
+        Ensures dead/phantom devices disappear from the dashboard automatically.
+        """
+        now = time.time()
+        stale_ids = []
+        for dev_id, dev in list(self.devices.items()):
+            is_stale = (now - dev.last_heartbeat > max_stale_seconds) or (dev.status == "DISCONNECTED") or (dev.ws is None)
+            if is_stale:
+                stale_ids.append(dev_id)
+                self.remove_device(dev_id)
+        return stale_ids
+
+    def clear_all(self) -> int:
+        """Force-clears all devices and rooms from memory."""
+        count = len(self.devices)
+        self.devices.clear()
+        self.rooms.clear()
+        return count
 
     def get_partner(self, device_id: str) -> Optional[CloudDeviceState]:
         dev = self.devices.get(device_id)

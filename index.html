@@ -183,9 +183,17 @@
 
         <!-- Action Buttons -->
         <div class="flex items-center gap-1.5">
-          <button onclick="refreshDevices()" title="ค้นหาจอ LDPlayer / Emulator ใหม่อัตโนมัติ" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-orange-500 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+          <button onclick="refreshDevices()" title="ค้นหาจอและอัปเดตสถานะใหม่อัตโนมัติ" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-orange-500 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
             <span>🔄</span>
             <span>สแกนหาจอ</span>
+          </button>
+          <button onclick="clearStaleDevices()" title="ลบจอที่ไม่ได้เชื่อมต่อ หรือออฟไลน์ออกทันที" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-amber-500 text-xs text-amber-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+            <span>🧹</span>
+            <span>เคลียร์จอออฟไลน์</span>
+          </button>
+          <button onclick="clearAllDevices()" title="ล้างรายการจอทั้งหมดให้หน้าเว็บโล่งทันที" class="px-3 py-1.5 rounded-xl bg-rose-950/40 border border-rose-800/50 hover:bg-rose-900/60 text-xs text-rose-300 flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+            <span>🗑️</span>
+            <span>ล้างจอทั้งหมด</span>
           </button>
           <button onclick="startAllInstances()" title="สั่งเริ่มทำงานทุกจอพร้อมกัน" class="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-xs text-emerald-300 font-semibold flex items-center gap-1.5 transition active:scale-95 shadow-sm">
             <span>▶️</span>
@@ -1301,6 +1309,30 @@
         }
       } catch (e) {
         console.error("Failed to refresh devices", e);
+      }
+    }
+
+    async function clearStaleDevices() {
+      try {
+        const res = await fetch('/api/instances/clear-stale', { method: 'POST' });
+        const data = await res.json();
+        await refreshDevices();
+        showToast(`🧹 ล้างจอที่ไม่ได้ใช้งานแล้ว (เหลือ ${data.remaining || 0} จอ)`, 'success');
+      } catch (e) {
+        showToast('เกิดข้อผิดพลาดในการล้างจอ: ' + e.message, 'error');
+      }
+    }
+
+    async function clearAllDevices() {
+      if (!confirm("⚠️ ต้องการล้างจอทั้งหมดในระบบให้หน้าเว็บโล่งสนิททันทีใช่หรือไม่?")) return;
+      try {
+        const res = await fetch('/api/instances/clear-all', { method: 'POST' });
+        instancesList = [];
+        currentDeviceId = null;
+        await refreshDevices();
+        showToast('🗑️ ล้างจอทั้งหมดในระบบเรียบร้อยแล้ว หน้าจอโล่ง 100%', 'success');
+      } catch (e) {
+        showToast('เกิดข้อผิดพลาดในการล้างจอ: ' + e.message, 'error');
       }
     }
 

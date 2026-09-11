@@ -194,6 +194,7 @@ async def ping():
 @app.get("/api/status")
 async def get_status():
     """Default status endpoint called by Web Dashboard."""
+    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
     # Pick the first active device, or fallback
     first_dev = next(iter(coordinator.devices.values()), None)
     return format_status_dict(first_dev)
@@ -201,7 +202,8 @@ async def get_status():
 
 @app.get("/api/instances")
 async def get_instances():
-    """Returns all connected devices/instances for multi-instance selector."""
+    """Returns all connected devices/instances for multi-instance selector (auto-purges stale)."""
+    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
     instances = []
     for dev_id, dev in coordinator.devices.items():
         partner = coordinator.get_partner(dev_id)
@@ -224,6 +226,7 @@ async def get_instances():
 
 @app.get("/api/instances/{device_id}/status")
 async def get_instance_status(device_id: str):
+    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
     dev = coordinator.devices.get(device_id)
     if dev is None and (device_id in ("default", "none", "emulator-5554") or len(coordinator.devices) == 1):
         dev = next(iter(coordinator.devices.values()), None)
@@ -232,7 +235,24 @@ async def get_instance_status(device_id: str):
 
 @app.get("/api/devices")
 async def get_devices():
+    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
     return [dev.to_dict() for dev in coordinator.devices.values()]
+
+
+@app.post("/api/instances/clear-stale")
+@app.post("/api/clear-stale")
+async def clear_stale_endpoint():
+    """Immediately purges any disconnected or stale devices."""
+    removed = coordinator.cleanup_stale_devices(max_stale_seconds=5.0)
+    return {"status": "ok", "removed": removed, "remaining": len(coordinator.devices)}
+
+
+@app.post("/api/instances/clear-all")
+@app.post("/api/clear-all")
+async def clear_all_endpoint():
+    """Forces all devices to be cleared from memory immediately for a clean slate."""
+    count = coordinator.clear_all()
+    return {"status": "ok", "cleared_count": count, "message": "All devices cleared."}
 
 
 @app.post("/api/instances/{device_id}/start")
