@@ -13,10 +13,10 @@ class CloudDeviceState:
         self.device_id = device_id
         self.room_id = room_id
         self.name = device_id
-        self.status = "RUNNING"               # Default to RUNNING so devices are active when connected
-        self.is_user_stopped = False        # Not stopped by default
+        self.status = "IDLE"                  # Default to IDLE standby until user clicks Start on Web Dashboard!
+        self.is_user_stopped = True           # Standby by default
         self.is_in_game = False
-        self.current_stage = "IDLE (Ready)"
+        self.current_stage = "IDLE (รอสั่งเริ่มจากเว็บ)"
         self.rounds_played = 0
         self.in_run_start_time = 0.0
         self.first_box_second = 0.0
@@ -26,7 +26,7 @@ class CloudDeviceState:
         self.session_xp = 0
         self.last_round_coins = 0
         self.last_round_xp = 0
-        self.box_counts = {"rainbow": 0, "gold": 0, "silver": 0, "bronze": 0}
+        self.box_counts = {"rainbow": 0, "gold": 0, "silver": 0, "bronze": 0, "wood": 0}
         self.ticket_counts = {"rainbow": 0, "gold": 0}
         self.last_heartbeat = time.time()
         self.ws = None
@@ -62,43 +62,99 @@ class StaggerCoordinator:
         self.room_settings: Dict[str, Dict[str, Any]] = {}  # room_id -> dict of settings (box_gap_seconds, box_pause_duration, etc.)
         self.lock = asyncio.Lock()
 
-    def register_device(self, device_id: str, room_id: str = "default_pair", ws: Any = None) -> CloudDeviceState:
+    def register_device(self, device_id: str, room_id: Optional[str] = None, ws: Any = None) -> CloudDeviceState:
+        # If room_id is default_pair or not specified, put into independent single room by default
+        actual_room = room_id if (room_id and room_id not in ("default_pair", "default", "none")) else f"single_{device_id}"
         if device_id not in self.devices:
-            self.devices[device_id] = CloudDeviceState(device_id, room_id)
+            self.devices[device_id] = CloudDeviceState(device_id, actual_room)
         
         dev = self.devices[device_id]
-        dev.room_id = room_id
+        dev.room_id = actual_room
         dev.ws = ws
         dev.last_heartbeat = time.time()
-        dev.status = "RUNNING"
-        dev.is_user_stopped = False
+        dev.status = "IDLE"                   # Default to IDLE standby upon connect!
+        dev.is_user_stopped = True            # Require explicit start from Web Dashboard
+        dev.current_stage = "IDLE (รอสั่งเริ่มจากเว็บ)"
 
-        if room_id not in self.rooms:
-            self.rooms[room_id] = []
-        if device_id not in self.rooms[room_id]:
-            self.rooms[room_id].append(device_id)
+        if actual_room not in self.rooms:
+            self.rooms[actual_room] = []
+        if device_id not in self.rooms[actual_room]:
+            self.rooms[actual_room].append(device_id)
 
         return dev
+
+    def _unpair(self, device_id: str):
+        """Removes device from any current paired room, reverting remaining devices to single."""
+        dev = self.devices.get(device_id)
+        if not dev or not dev.room_id:
+            return
+        old_room = dev.room_id
+        if old_room in self.rooms:
+            if device_id in self.rooms[old_room]:
+                self.rooms[old_room].remove(device_id)
+            # If a partner remains alone in old pair room, revert them to single mode
+            for remaining_id in list(self.rooms[old_room]):
+                rem_dev = self.devices.get(remaining_id)
+                if rem_dev:
+                    rem_dev.room_id = f"single_{remaining_id}"
+                    rem_dev.settings["stagger_mode"] = False
+                    rem_dev.settings["stagger_partner_id"] = None
+                    if rem_dev.room_id not in self.rooms:
+                        self.rooms[rem_dev.room_id] = []
+                    self.rooms[rem_dev.room_id].append(remaining_id)
+            if not self.rooms[old_room]:
+                del self.rooms[old_room]
+
+    def set_pair(self, dev1_id: str, dev2_id: Optional[str], enabled: bool = True):
+        """
+        Dynamically pairs dev1 and dev2 into a shared pair room.
+        If enabled is False or dev2 is empty/none, both are set to independent single mode.
+        """
+        dev1 = self.devices.get(dev1_id)
+        if not dev1:
+            return
+
+        self._unpair(dev1_id)
+
+        if not enabled or not dev2_id or dev2_id in ("none", "", "null", "auto", "default") or dev2_id not in self.devices:
+            dev1.room_id = f"single_{dev1_id}"
+            dev1.settings["stagger_mode"] = False
+            dev1.settings["stagger_partner_id"] = None
+            if dev1.room_id not in self.rooms:
+                self.rooms[dev1.room_id] = []
+            if dev1_id not in self.rooms[dev1.room_id]:
+                self.rooms[dev1.room_id].append(dev1_id)
+            return
+
+        dev2 = self.devices.get(dev2_id)
+        self._unpair(dev2_id)
+
+        pair_room = f"pair_{min(dev1_id, dev2_id)}_{max(dev1_id, dev2_id)}"
+        dev1.room_id = pair_room
+        dev2.room_id = pair_room
+        dev1.settings["stagger_mode"] = True
+        dev1.settings["stagger_partner_id"] = dev2_id
+        dev2.settings["stagger_mode"] = True
+        dev2.settings["stagger_partner_id"] = dev1_id
+
+        self.rooms[pair_room] = [dev1_id, dev2_id]
+        print(f"🔗 [StaggerCoordinator] Paired {dev1_id} <-> {dev2_id} in room '{pair_room}'")
 
     def remove_device(self, device_id: str):
         """Completely removes a device from registry and room assignments."""
         if device_id in self.devices:
             dev = self.devices[device_id]
             del self.devices[device_id]
-            if dev.room_id in self.rooms:
-                if device_id in self.rooms[dev.room_id]:
-                    self.rooms[dev.room_id].remove(device_id)
-                if not self.rooms[dev.room_id]:
-                    del self.rooms[dev.room_id]
+            self._unpair(device_id)
 
     def unregister_device(self, device_id: str):
         """Called when WebSocket closes. Immediately purges disconnected device."""
         self.remove_device(device_id)
 
-    def cleanup_stale_devices(self, max_stale_seconds: float = 60.0) -> List[str]:
+    def cleanup_stale_devices(self, max_stale_seconds: float = 8.0) -> List[str]:
         """
         Auto-prunes any devices that disconnected or haven't sent a heartbeat for > max_stale_seconds.
-        Ensures dead/phantom devices disappear from the dashboard automatically.
+        Ensures dead/phantom devices disappear from the dashboard within seconds.
         """
         now = time.time()
         stale_ids = []
@@ -118,13 +174,15 @@ class StaggerCoordinator:
 
     def get_partner(self, device_id: str) -> Optional[CloudDeviceState]:
         dev = self.devices.get(device_id)
-        if not dev or not dev.room_id:
+        if not dev or not dev.room_id or dev.room_id.startswith("single_"):
+            return None
+        if not dev.settings.get("stagger_mode", False):
             return None
         room_devs = self.rooms.get(dev.room_id, [])
         for pid in room_devs:
             if pid != device_id and pid in self.devices:
                 p = self.devices[pid]
-                if p.status != "DISCONNECTED" and (time.time() - p.last_heartbeat < 30):
+                if p.status != "DISCONNECTED" and (time.time() - p.last_heartbeat < 15):
                     return p
         return None
 
