@@ -656,16 +656,9 @@ async def adjust_tickets_endpoint(req: TicketAdjustRequest, device_id: Optional[
     partner = coordinator.get_partner(did) if dev else None
 
     if req.apply_all or (req.rainbow == 0 and req.gold == 0):
-        if dev:
-            dev.ticket_counts["rainbow"] = max(0, req.rainbow)
-            dev.ticket_counts["gold"] = max(0, req.gold)
-        if partner:
-            partner.ticket_counts["rainbow"] = max(0, req.rainbow)
-            partner.ticket_counts["gold"] = max(0, req.gold)
-        if not dev and not partner:
-            for d in coordinator.devices.values():
-                d.ticket_counts["rainbow"] = max(0, req.rainbow)
-                d.ticket_counts["gold"] = max(0, req.gold)
+        for d in coordinator.devices.values():
+            d.ticket_counts["rainbow"] = max(0, req.rainbow)
+            d.ticket_counts["gold"] = max(0, req.gold)
     else:
         if dev:
             dev.ticket_counts["rainbow"] = max(0, req.rainbow)
