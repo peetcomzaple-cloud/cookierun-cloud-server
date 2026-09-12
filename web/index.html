@@ -183,9 +183,17 @@
 
         <!-- Action Buttons -->
         <div class="flex items-center gap-1.5">
-          <button onclick="refreshDevices()" title="ค้นหาจอ LDPlayer / Emulator ใหม่อัตโนมัติ" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-orange-500 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+          <button onclick="refreshDevices()" title="ค้นหาจอและอัปเดตสถานะใหม่อัตโนมัติ" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-orange-500 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
             <span>🔄</span>
             <span>สแกนหาจอ</span>
+          </button>
+          <button onclick="clearStaleDevices()" title="ลบจอที่ไม่ได้เชื่อมต่อ หรือออฟไลน์ออกทันที" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-amber-500 text-xs text-amber-300 hover:text-white flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+            <span>🧹</span>
+            <span>เคลียร์จอออฟไลน์</span>
+          </button>
+          <button onclick="clearAllDevices()" title="ล้างรายการจอทั้งหมดให้หน้าเว็บโล่งทันที" class="px-3 py-1.5 rounded-xl bg-rose-950/40 border border-rose-800/50 hover:bg-rose-900/60 text-xs text-rose-300 flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+            <span>🗑️</span>
+            <span>ล้างจอทั้งหมด</span>
           </button>
           <button onclick="startAllInstances()" title="สั่งเริ่มทำงานทุกจอพร้อมกัน" class="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-xs text-emerald-300 font-semibold flex items-center gap-1.5 transition active:scale-95 shadow-sm">
             <span>▶️</span>
@@ -814,7 +822,7 @@
                   </span>
                   <p class="text-[11px] text-slate-400">ตรวจดูวินาทีที่ได้กล่องแรกทั้ง 2 จอ หากห่างกันน้อยกว่ากำหนดจะพักจอเพื่อเว้นระยะห่าง</p>
                 </div>
-                <input type="checkbox" id="cfg-stagger-mode" onchange="updateSubgroupVisibility(); saveBotSettingsAuto();" class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-0">
+                <input type="checkbox" id="cfg-stagger-mode" onchange="onStaggerModeToggle()" class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-0">
               </label>
 
               <!-- Dynamic Subgroup: Stagger Options -->
@@ -837,7 +845,7 @@
                       <span>⏱️ ระยะห่างกล่องแรก:</span>
                     </label>
                     <div class="relative flex items-center">
-                      <input type="number" id="cfg-box-gap-seconds" min="5" max="60" value="20" step="1" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
+                      <input type="number" id="cfg-box-gap-seconds" min="1" max="120" value="6" step="0.5" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
                       <span class="absolute right-2 text-[10px] text-slate-400">วินาที</span>
                     </div>
                     <p class="text-[10px] text-slate-400">น้อยกว่านี้ = สั่งพักจอ</p>
@@ -847,7 +855,7 @@
                       <span>⏸️ ระยะเวลาพักจอ:</span>
                     </label>
                     <div class="relative flex items-center">
-                      <input type="number" id="cfg-box-pause-duration" min="1" max="60" value="25" step="1" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
+                      <input type="number" id="cfg-box-pause-duration" min="1" max="60" value="5" step="0.5" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
                       <span class="absolute right-2 text-[10px] text-slate-400">วินาที</span>
                     </div>
                     <p class="text-[10px] text-slate-400">กด Pause ค้างไว้</p>
@@ -1304,6 +1312,30 @@
       }
     }
 
+    async function clearStaleDevices() {
+      try {
+        const res = await fetch('/api/instances/clear-stale', { method: 'POST' });
+        const data = await res.json();
+        await refreshDevices();
+        showToast(`🧹 ล้างจอที่ไม่ได้ใช้งานแล้ว (เหลือ ${data.remaining || 0} จอ)`, 'success');
+      } catch (e) {
+        showToast('เกิดข้อผิดพลาดในการล้างจอ: ' + e.message, 'error');
+      }
+    }
+
+    async function clearAllDevices() {
+      if (!confirm("⚠️ ต้องการล้างจอทั้งหมดในระบบให้หน้าเว็บโล่งสนิททันทีใช่หรือไม่?")) return;
+      try {
+        const res = await fetch('/api/instances/clear-all', { method: 'POST' });
+        instancesList = [];
+        currentDeviceId = null;
+        await refreshDevices();
+        showToast('🗑️ ล้างจอทั้งหมดในระบบเรียบร้อยแล้ว หน้าจอโล่ง 100%', 'success');
+      } catch (e) {
+        showToast('เกิดข้อผิดพลาดในการล้างจอ: ' + e.message, 'error');
+      }
+    }
+
     function updateDeviceSelectDropdown() {
       const select = document.getElementById('device-select');
       if (!select) return;
@@ -1334,22 +1366,16 @@
       if (!instancesList || instancesList.length < 2) return null;
       let p1 = null, p2 = null;
 
-      // Check explicit partner pairings first
+      // Check explicit partner pairings where stagger_mode is active
       for (const inst of instancesList) {
         if (inst.stagger_mode && inst.stagger_partner_id) {
           const partner = instancesList.find(i => i.id === inst.stagger_partner_id);
-          if (partner) {
+          if (partner && partner.stagger_mode) {
             p1 = inst;
             p2 = partner;
             break;
           }
         }
-      }
-
-      // If at least 2 devices connected, pair the first two devices!
-      if (!p1 && instancesList.length >= 2) {
-        p1 = instancesList[0];
-        p2 = instancesList[1];
       }
 
       if (p1 && p2 && p1.id !== p2.id) {
@@ -1604,63 +1630,46 @@
       const modeCheck = document.getElementById('cfg-stagger-mode');
       if (!select) return;
 
-      const pairInfo = getPairedDeviceGroup();
       select.innerHTML = '';
+      const currentInst = instancesList ? instancesList.find(i => i.id === currentDeviceId) : null;
+      const currentPartnerId = (currentInst && currentInst.stagger_mode) ? (currentInst.stagger_partner_id || '') : '';
+      const isCurrentlyPaired = !!currentPartnerId;
 
-      if (pairInfo) {
-        const isPartOfPair = (currentDeviceId === pairInfo.s1 || currentDeviceId === pairInfo.s2);
-        if (isPartOfPair) {
-          const partnerId = (currentDeviceId === pairInfo.s1) ? pairInfo.s2 : pairInfo.s1;
-          const partnerLabel = (currentDeviceId === pairInfo.s1) ? 'จอ 2' : 'จอ 1';
-          select.disabled = false;
-          if (modeCheck) modeCheck.disabled = false;
+      if (modeCheck) {
+        modeCheck.disabled = false;
+        modeCheck.title = "";
+      }
+      select.disabled = false;
 
-          const opt = document.createElement('option');
-          opt.value = partnerId;
-          opt.textContent = `🔗 คู่หู: ${partnerId} (${partnerLabel}) [🔒 ล็อค 2 จอ - ห้ามผูกจอที่ 3]`;
-          opt.selected = true;
-          select.appendChild(opt);
+      // 1. Single mode option (Default)
+      const optSingle = document.createElement('option');
+      optSingle.value = "";
+      optSingle.textContent = "👤 วิ่งเดี่ยว (ไม่จับคู่กับใคร)";
+      if (!isCurrentlyPaired) optSingle.selected = true;
+      select.appendChild(optSingle);
 
-          if (badge) {
-            badge.textContent = `คู่หู 2 จอ: ${partnerId}`;
-            badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono border border-indigo-500/30";
-          }
-        } else {
-          // Current device is a 3rd device trying to pair! Fix that 3rd screen cannot be paired!
-          select.disabled = true;
-          const opt = document.createElement('option');
-          opt.value = "";
-          opt.textContent = `🔒 ไม่สามารถผูกได้ (มีคู่หูครบ 2 จอแล้ว: ${pairInfo.s1} + ${pairInfo.s2})`;
-          select.appendChild(opt);
-
-          if (modeCheck) {
-            modeCheck.checked = false;
-            modeCheck.disabled = true;
-            modeCheck.title = "โหมดคู่หูจำกัดสูงสุด 2 จอเท่านั้น";
-          }
-
-          if (badge) {
-            badge.textContent = "🔒 ล็อค 2 จอแล้ว (ห้ามผูกจอที่ 3)";
-            badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-mono border border-rose-500/30";
-          }
-        }
-      } else {
-        // No pair yet
-        select.disabled = false;
-        if (modeCheck) modeCheck.disabled = false;
-        const autoOpt = document.createElement('option');
-        autoOpt.value = "";
-        autoOpt.textContent = "🌐 อัตโนมัติ (ตรวจจับจอจำลองเพื่อจับคู่ 2 จอ)";
-        select.appendChild(autoOpt);
-
+      // 2. Options for every other connected screen
+      if (instancesList) {
         instancesList.forEach(inst => {
           if (inst.id !== currentDeviceId) {
             const opt = document.createElement('option');
             opt.value = inst.id;
-            opt.textContent = `🔗 จับคู่กับ: ${inst.id} (${inst.model || inst.name || 'Emulator'})`;
+            const isCurrent = (inst.id === currentPartnerId);
+            opt.textContent = isCurrent ? `🔗 จับคู่กับ: ${inst.id} (คู่ปัจจุบัน)` : `🔗 จับคู่กับ: ${inst.id}`;
+            if (isCurrent) opt.selected = true;
             select.appendChild(opt);
           }
         });
+      }
+
+      if (badge) {
+        if (isCurrentlyPaired) {
+          badge.textContent = `คู่หู: ${currentPartnerId}`;
+          badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono border border-emerald-500/30";
+        } else {
+          badge.textContent = "วิ่งเดี่ยว";
+          badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono border border-slate-700";
+        }
       }
     }
 
@@ -1705,13 +1714,65 @@
       updateSubgroupVisibility();
     }
 
+    async function onStaggerModeToggle() {
+      updateSubgroupVisibility();
+      const enabled = !!document.getElementById('cfg-stagger-mode')?.checked;
+      let partnerSelect = document.getElementById('cfg-stagger-partner');
+      let partnerId = (partnerSelect?.value || '').trim();
+
+      if (enabled && !partnerId && instancesList) {
+        const other = instancesList.find(i => i.id !== currentDeviceId);
+        if (other) {
+          partnerId = other.id;
+          if (partnerSelect) partnerSelect.value = partnerId;
+        }
+      }
+
+      if (currentDeviceId) {
+        try {
+          await fetch(`/api/instances/${encodeURIComponent(currentDeviceId)}/pair`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              partner_id: enabled ? partnerId : '',
+              enabled: enabled
+            })
+          });
+        } catch (e) {
+          console.warn('Pair API call error:', e);
+        }
+      }
+
+      await saveBotSettingsAuto();
+      await fetchStatus();
+      await refreshDevices(true);
+    }
+
     async function onStaggerPartnerChange() {
       const partnerId = (document.getElementById('cfg-stagger-partner')?.value || '').trim();
-      const badge = document.getElementById('stagger-partner-status-badge');
-      if (badge) {
-        badge.textContent = partnerId ? `คู่กับ ${partnerId}` : 'Auto';
+      const modeCheck = document.getElementById('cfg-stagger-mode');
+      const enabled = !!partnerId;
+      if (modeCheck) modeCheck.checked = enabled;
+      updateSubgroupVisibility();
+
+      if (currentDeviceId) {
+        try {
+          await fetch(`/api/instances/${encodeURIComponent(currentDeviceId)}/pair`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              partner_id: partnerId,
+              enabled: enabled
+            })
+          });
+        } catch (e) {
+          console.warn('Pair API call error:', e);
+        }
       }
+
       await saveBotSettingsAuto();
+      await fetchStatus();
+      await refreshDevices(true);
     }
 
     async function loadBotSettings(deviceId = null) {
@@ -1804,8 +1865,8 @@
         send_friend_lives: document.getElementById('cfg-send-lives').checked,
         stagger_mode: document.getElementById('cfg-stagger-mode').checked,
         stagger_partner_id: (document.getElementById('cfg-stagger-partner')?.value || '').trim(),
-        box_gap_seconds: parseFloat(document.getElementById('cfg-box-gap-seconds')?.value) || 20,
-        box_pause_duration: parseFloat(document.getElementById('cfg-box-pause-duration')?.value) || 10,
+        box_gap_seconds: parseFloat(document.getElementById('cfg-box-gap-seconds')?.value) || 6.0,
+        box_pause_duration: parseFloat(document.getElementById('cfg-box-pause-duration')?.value) || 5.0,
         box_pause_target: document.getElementById('cfg-box-pause-target')?.value || 'slower',
         stop_goal_rounds_enabled: document.getElementById('cfg-goal-rounds-enabled').checked,
         stop_goal_rounds_target: parseInt(document.getElementById('cfg-goal-rounds-target').value) || 50,
@@ -1876,7 +1937,8 @@
     async function toggleBot() {
       const btn = document.getElementById('btn-toggle-bot');
       const targetId = currentDeviceId || 'default';
-      const isPaired2Screens = (lastStatusData && lastStatusData.combined_stats && lastStatusData.combined_stats.enabled) || !!document.getElementById('cfg-stagger-mode')?.checked || (instancesList && instancesList.length >= 2);
+      const pairInfo = getPairedDeviceGroup();
+      const isPaired2Screens = isPairedView && !!pairInfo;
       const isAnyRunning = isRunning || (lastStatusData && lastStatusData.combined_stats && lastStatusData.combined_stats.enabled && lastStatusData.combined_stats.partner_running) || (lastStatusData && !!lastStatusData.is_any_running);
       const isStopAction = (btn && btn.textContent && btn.textContent.includes('หยุด')) || isAnyRunning;
 
@@ -1910,8 +1972,12 @@
 
         // Send network stop requests in background
         try {
-          fetch('/api/instances/stop-all', { method: 'POST' }).catch(() => {});
-          fetch(`/api/instances/${encodeURIComponent(targetId)}/stop`, { method: 'POST' }).catch(() => {});
+          if (isPaired2Screens) {
+            fetch(`/api/instances/${encodeURIComponent(pairInfo.s1)}/stop`, { method: 'POST' }).catch(() => {});
+            fetch(`/api/instances/${encodeURIComponent(pairInfo.s2)}/stop`, { method: 'POST' }).catch(() => {});
+          } else {
+            fetch(`/api/instances/${encodeURIComponent(targetId)}/stop`, { method: 'POST' }).catch(() => {});
+          }
           fetch('/api/stop', { method: 'POST' }).catch(() => {});
         } catch (e) {}
 
@@ -1926,12 +1992,20 @@
       stopRequestedUntil = 0;
       const payload = getFormSettingsPayload();
       try {
-        if (isPaired2Screens && instancesList && instancesList.length >= 2) {
+        if (isPaired2Screens) {
           await saveBotSettingsAuto();
-          const res = await fetch('/api/instances/start-all', { method: 'POST' });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || data.message);
+          await fetch(`/api/instances/${encodeURIComponent(pairInfo.s1)}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          await fetch(`/api/instances/${encodeURIComponent(pairInfo.s2)}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
         } else {
+          await saveBotSettingsAuto();
           const res = await fetch(`/api/instances/${encodeURIComponent(targetId)}/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2279,8 +2353,8 @@
 
         const pairInfo = getPairedDeviceGroup();
         const hasStaggerConfig = !!document.getElementById('cfg-stagger-mode')?.checked;
-        const isStaggerPaired = !!pairInfo && (hasStaggerConfig || (instancesList && instancesList.length >= 2) || !!(data.combined_stats && data.combined_stats.enabled));
-        const shouldShowDualView = isPairedView && (isStaggerPaired || !!pairInfo);
+        const isStaggerPaired = !!pairInfo && (hasStaggerConfig || !!(data.combined_stats && data.combined_stats.enabled));
+        const shouldShowDualView = isPairedView && !!pairInfo;
         const partnerDevId = (data.combined_stats && data.combined_stats.partner_id) || (pairInfo ? (pairInfo.s1 === targetId ? pairInfo.s2 : pairInfo.s1) : null);
         const partnerIsRunning = (data.combined_stats && data.combined_stats.partner_running) || (instancesList && instancesList.find(i => i.id === partnerDevId)?.is_running);
         const isFarmRunning = isRunning || (shouldShowDualView && partnerIsRunning) || !!data.is_any_running;
@@ -2376,6 +2450,8 @@
           const s2Boxes = cs.screen2_boxes !== undefined ? cs.screen2_boxes : (cs.breakdown?.partner?.boxes || 0);
           const s1Coins = cs.screen1_coins !== undefined ? cs.screen1_coins : (cs.breakdown?.main?.coins || 0);
           const s2Coins = cs.screen2_coins !== undefined ? cs.screen2_coins : (cs.breakdown?.partner?.coins || 0);
+          const s1Xp = cs.screen1_xp !== undefined ? cs.screen1_xp : (cs.breakdown?.main?.xp || 0);
+          const s2Xp = cs.screen2_xp !== undefined ? cs.screen2_xp : (cs.breakdown?.partner?.xp || 0);
 
           document.getElementById('stat-stage').innerHTML = `
             <div class="space-y-0.5">
@@ -2409,7 +2485,7 @@
           document.getElementById('stat-xp-earned').innerHTML = `
             +${(cs.total_xp || 0).toLocaleString()} EXP
             <span class="text-xs font-normal text-sky-300/80 block mt-0.5">
-              รวม 2 จอ
+              รวม 2 จอ (จอ 1: +${s1Xp.toLocaleString()} | จอ 2: +${s2Xp.toLocaleString()})
             </span>
           `;
 
@@ -2557,6 +2633,21 @@
         if (streamImg) streamImg.src = `/api/instances/${encodeURIComponent(targetId)}/stream?t=${ts}`;
       }
     }
+
+    // Auto-reconnect stream if disconnected or interrupted
+    ['stream-img', 'stream-img-1', 'stream-img-2'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.onerror = () => {
+          setTimeout(() => {
+            if (el.src) {
+              const base = el.src.split('?')[0];
+              el.src = `${base}?t=${Date.now()}`;
+            }
+          }, 2500);
+        };
+      }
+    });
 
     function connectWebSocket(deviceId = null) {
       if (ws) {
