@@ -13,10 +13,10 @@ class CloudDeviceState:
         self.device_id = device_id
         self.room_id = room_id
         self.name = device_id
-        self.status = "IDLE"               # IDLE, RUNNING, IN_GAME, PAUSED, DISCONNECTED
-        self.is_user_stopped = True        # Default to True: Wait for user to manually click Start on Web Dashboard!
+        self.status = "RUNNING"               # Default to RUNNING so devices are active when connected
+        self.is_user_stopped = False        # Not stopped by default
         self.is_in_game = False
-        self.current_stage = "IDLE (Stopped)"
+        self.current_stage = "IDLE (Ready)"
         self.rounds_played = 0
         self.in_run_start_time = 0.0
         self.first_box_second = 0.0
@@ -39,9 +39,9 @@ class CloudDeviceState:
             "device_id": self.device_id,
             "room_id": self.room_id,
             "name": self.name,
-            "status": "IDLE" if getattr(self, "is_user_stopped", True) else self.status,
-            "is_in_game": False if getattr(self, "is_user_stopped", True) else self.is_in_game,
-            "current_stage": "IDLE (Stopped)" if getattr(self, "is_user_stopped", True) else self.current_stage,
+            "status": "IDLE" if getattr(self, "is_user_stopped", False) else self.status,
+            "is_in_game": False if getattr(self, "is_user_stopped", False) else self.is_in_game,
+            "current_stage": "IDLE (Stopped)" if getattr(self, "is_user_stopped", False) else self.current_stage,
             "rounds_played": self.rounds_played,
             "first_box_second": self.first_box_second,
             "session_coins": self.session_coins,
@@ -59,6 +59,7 @@ class StaggerCoordinator:
     def __init__(self):
         self.devices: Dict[str, CloudDeviceState] = {}
         self.rooms: Dict[str, List[str]] = {}  # room_id -> list of device_ids
+        self.room_settings: Dict[str, Dict[str, Any]] = {}  # room_id -> dict of settings (box_gap_seconds, box_pause_duration, etc.)
         self.lock = asyncio.Lock()
 
     def register_device(self, device_id: str, room_id: str = "default_pair", ws: Any = None) -> CloudDeviceState:
@@ -69,11 +70,8 @@ class StaggerCoordinator:
         dev.room_id = room_id
         dev.ws = ws
         dev.last_heartbeat = time.time()
-        if getattr(dev, "is_user_stopped", True):
-            dev.status = "IDLE"
-            dev.is_in_game = False
-        else:
-            dev.status = "RUNNING"
+        dev.status = "RUNNING"
+        dev.is_user_stopped = False
 
         if room_id not in self.rooms:
             self.rooms[room_id] = []
@@ -97,7 +95,7 @@ class StaggerCoordinator:
         """Called when WebSocket closes. Immediately purges disconnected device."""
         self.remove_device(device_id)
 
-    def cleanup_stale_devices(self, max_stale_seconds: float = 15.0) -> List[str]:
+    def cleanup_stale_devices(self, max_stale_seconds: float = 60.0) -> List[str]:
         """
         Auto-prunes any devices that disconnected or haven't sent a heartbeat for > max_stale_seconds.
         Ensures dead/phantom devices disappear from the dashboard automatically.
@@ -132,21 +130,13 @@ class StaggerCoordinator:
 
     def check_can_start_round(self, device_id: str) -> Tuple[bool, str]:
         """
-        Anti-Collision start check:
-        Ensures 2 devices in the same room don't start at the exact same second.
+        Start check: Immediate start allowed for all screens (no startup delay between partners).
+        Stagger separation is strictly handled via in-game first mystery box detection.
         """
         partner = self.get_partner(device_id)
         if not partner:
             return True, "วิ่งเดี่ยว (ไม่มีคู่หูออนไลน์)"
-
-        if partner.is_in_game:
-            partner_elapsed = time.time() - partner.in_run_start_time if partner.in_run_start_time > 0 else 0
-            # If partner just started within 12 seconds, wait briefly to establish time separation
-            if partner_elapsed < 12.0:
-                wait_sec = int(12.0 - partner_elapsed)
-                return False, f"คู่หู ({partner.name}) เพิ่งเริ่มวิ่งไป {partner_elapsed:.1f}s — รอเว้นระยะ {wait_sec}s เพื่อไม่ให้ชนกัน"
-
-        return True, "พร้อมเริ่มวิ่งได้ทันที (ระยะเวลาปลอดภัย)"
+        return True, "พร้อมเริ่มวิ่งได้ทันที (จับเวลาเว้นระยะจากกล่องแรก)"
 
     async def handle_first_box_event(self, device_id: str, box_second: float) -> Optional[str]:
         """
@@ -170,24 +160,27 @@ class StaggerCoordinator:
             return f"📦 [First Box] {dev.name} เก็บกล่องแรกที่ {box_second:.1f}s — รอจอคู่หู ({partner.name}) เจอกล่องแรกเพื่อวัดระยะห่าง"
 
         gap = abs(dev.first_box_wall_time - partner.first_box_wall_time)
-        threshold = 20.0
-        pause_duration = 10.0
+
+        # Dynamic user-configurable threshold & pause duration from settings (matches PC bot)
+        room_cfg = getattr(self, "room_settings", {}).get(dev.room_id, {})
+        threshold = float(dev.settings.get("box_gap_seconds") or partner.settings.get("box_gap_seconds") or room_cfg.get("box_gap_seconds", 6.0))
+        pause_duration = float(dev.settings.get("box_pause_duration") or partner.settings.get("box_pause_duration") or room_cfg.get("box_pause_duration", 5.0))
 
         if gap >= threshold:
             return f"✅ [Anti-Collision] ระยะห่างกล่องแรกระหว่าง {dev.name} กับ {partner.name} = {gap:.1f}s (ปลอดภัย >= {threshold:.1f}s) — ไม่ต้องหยุดชะลอ"
 
-        # Gap is too close (< 20s)! Pause the slower runner (the one that collected the box second)
+        # Gap is too close (< threshold)! Pause the slower runner (the one that collected the box second)
         target = dev if dev.first_box_wall_time > partner.first_box_wall_time else partner
         if not target.has_paused_for_box:
             target.has_paused_for_box = True
-            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรกเพียง {gap:.1f}s (< {threshold:.1f}s) ใกล้กันเกินไป! สั่ง {target.name} กด Pause ชะลอ {pause_duration}s!"
+            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรกเพียง {gap:.1f}s (< {threshold:.1f}s) ใกล้กันเกินไป! สั่ง {target.name} กด Pause ชะลอ {pause_duration:.1f}s!"
             if target.ws:
                 try:
                     await target.ws.send_json({
                         "type": "COMMAND",
                         "command": "STAGGER_PAUSE",
                         "duration": pause_duration,
-                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป"
+                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป (เกณฑ์: {threshold:.1f}s)"
                     })
                 except Exception:
                     pass

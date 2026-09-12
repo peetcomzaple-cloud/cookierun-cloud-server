@@ -845,7 +845,7 @@
                       <span>⏱️ ระยะห่างกล่องแรก:</span>
                     </label>
                     <div class="relative flex items-center">
-                      <input type="number" id="cfg-box-gap-seconds" min="5" max="60" value="20" step="1" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
+                      <input type="number" id="cfg-box-gap-seconds" min="1" max="120" value="6" step="0.5" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
                       <span class="absolute right-2 text-[10px] text-slate-400">วินาที</span>
                     </div>
                     <p class="text-[10px] text-slate-400">น้อยกว่านี้ = สั่งพักจอ</p>
@@ -855,7 +855,7 @@
                       <span>⏸️ ระยะเวลาพักจอ:</span>
                     </label>
                     <div class="relative flex items-center">
-                      <input type="number" id="cfg-box-pause-duration" min="1" max="60" value="25" step="1" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
+                      <input type="number" id="cfg-box-pause-duration" min="1" max="60" value="5" step="0.5" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
                       <span class="absolute right-2 text-[10px] text-slate-400">วินาที</span>
                     </div>
                     <p class="text-[10px] text-slate-400">กด Pause ค้างไว้</p>
@@ -1836,8 +1836,8 @@
         send_friend_lives: document.getElementById('cfg-send-lives').checked,
         stagger_mode: document.getElementById('cfg-stagger-mode').checked,
         stagger_partner_id: (document.getElementById('cfg-stagger-partner')?.value || '').trim(),
-        box_gap_seconds: parseFloat(document.getElementById('cfg-box-gap-seconds')?.value) || 20,
-        box_pause_duration: parseFloat(document.getElementById('cfg-box-pause-duration')?.value) || 10,
+        box_gap_seconds: parseFloat(document.getElementById('cfg-box-gap-seconds')?.value) || 6.0,
+        box_pause_duration: parseFloat(document.getElementById('cfg-box-pause-duration')?.value) || 5.0,
         box_pause_target: document.getElementById('cfg-box-pause-target')?.value || 'slower',
         stop_goal_rounds_enabled: document.getElementById('cfg-goal-rounds-enabled').checked,
         stop_goal_rounds_target: parseInt(document.getElementById('cfg-goal-rounds-target').value) || 50,

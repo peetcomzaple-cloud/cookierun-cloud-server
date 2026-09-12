@@ -120,8 +120,8 @@ def format_status_dict(dev: Optional[CloudDeviceState] = None) -> Dict[str, Any]
         "stagger_mode": True,
         "stagger_partner_id": partner.device_id if partner else None,
         "combined_stats": combined_stats,
-        "box_gap_seconds": 6.0,
-        "box_pause_duration": 5.0,
+        "box_gap_seconds": float(dev.settings.get("box_gap_seconds") or getattr(coordinator, "room_settings", {}).get(dev.room_id, {}).get("box_gap_seconds", 6.0)),
+        "box_pause_duration": float(dev.settings.get("box_pause_duration") or getattr(coordinator, "room_settings", {}).get(dev.room_id, {}).get("box_pause_duration", 5.0)),
         "first_box_second": dev.first_box_second,
         "has_paused_for_box": dev.has_paused_for_box,
         "is_in_game": False if getattr(dev, "is_user_stopped", False) else dev.is_in_game,
@@ -178,8 +178,25 @@ async def save_instance_settings(device_id: Optional[str] = None, settings: Dict
     dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
     if dev and settings:
         dev.settings.update(settings)
+        if dev.room_id:
+            if not hasattr(coordinator, "room_settings"):
+                coordinator.room_settings = {}
+            if dev.room_id not in coordinator.room_settings:
+                coordinator.room_settings[dev.room_id] = {}
+            coordinator.room_settings[dev.room_id].update(settings)
+            partner = coordinator.get_partner(dev.device_id)
+            if partner:
+                partner.settings.update(settings)
+                if partner.ws:
+                    try:
+                        await partner.ws.send_json({"type": "SETTINGS_UPDATE", "settings": partner.settings})
+                    except Exception:
+                        pass
         if dev.ws:
-            await dev.ws.send_json({"type": "SETTINGS_UPDATE", "settings": dev.settings})
+            try:
+                await dev.ws.send_json({"type": "SETTINGS_UPDATE", "settings": dev.settings})
+            except Exception:
+                pass
         return {"status": "ok", "settings": dev.settings}
     return {"status": "error", "message": "Device not found or empty settings"}
 
@@ -194,7 +211,7 @@ async def ping():
 @app.get("/api/status")
 async def get_status():
     """Default status endpoint called by Web Dashboard."""
-    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=60.0)
     # Pick the first active device, or fallback
     first_dev = next(iter(coordinator.devices.values()), None)
     return format_status_dict(first_dev)
@@ -203,7 +220,7 @@ async def get_status():
 @app.get("/api/instances")
 async def get_instances():
     """Returns all connected devices/instances for multi-instance selector (auto-purges stale)."""
-    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=60.0)
     instances = []
     for dev_id, dev in coordinator.devices.items():
         partner = coordinator.get_partner(dev_id)
@@ -226,7 +243,7 @@ async def get_instances():
 
 @app.get("/api/instances/{device_id}/status")
 async def get_instance_status(device_id: str):
-    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=60.0)
     dev = coordinator.devices.get(device_id)
     if dev is None and (device_id in ("default", "none", "emulator-5554") or len(coordinator.devices) == 1):
         dev = next(iter(coordinator.devices.values()), None)
@@ -235,7 +252,7 @@ async def get_instance_status(device_id: str):
 
 @app.get("/api/devices")
 async def get_devices():
-    coordinator.cleanup_stale_devices(max_stale_seconds=20.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=60.0)
     return [dev.to_dict() for dev in coordinator.devices.values()]
 
 
@@ -377,13 +394,21 @@ async def get_device_frame(device_id: Optional[str] = None):
 
 
 async def frame_stream_generator(device_id: Optional[str] = None):
-    """Yields MJPEG stream from latest frames received from Redfinger."""
+    """Yields ultra-smooth, high-frequency MJPEG stream from latest frames received from Redfinger."""
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+    last_sent_bytes = None
+    last_ping = time.time()
     while True:
         dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
         if dev and dev.latest_frame_bytes:
-            yield boundary + dev.latest_frame_bytes + b"\r\n"
-        await asyncio.sleep(0.5)
+            if dev.latest_frame_bytes is not last_sent_bytes:
+                last_sent_bytes = dev.latest_frame_bytes
+                last_ping = time.time()
+                yield boundary + dev.latest_frame_bytes + b"\r\n"
+            elif time.time() - last_ping > 2.0:
+                last_ping = time.time()
+                yield boundary + dev.latest_frame_bytes + b"\r\n"
+        await asyncio.sleep(0.03)
 
 
 @app.get("/api/stream")
@@ -400,14 +425,11 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
     await websocket.accept()
     dev = coordinator.register_device(device_id, room_id, websocket)
     print(f"📱 [CloudHub] Device connected: {device_id} in room: {room_id}")
+    # Inherit room settings if any
+    if room_id in getattr(coordinator, "room_settings", {}):
+        dev.settings.update(coordinator.room_settings[room_id])
     if dev.settings:
         await websocket.send_json({"type": "CONFIG", "settings": dev.settings})
-    # Ensure newly connected device stays in IDLE until user clicks START on Web Dashboard
-    if getattr(dev, "is_user_stopped", True):
-        try:
-            await websocket.send_json({"type": "COMMAND", "command": "STOP"})
-        except Exception:
-            pass
 
     try:
         while True:
@@ -470,6 +492,17 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                 if sync_msg:
                     print(sync_msg)
 
+            elif mtype == "BOX_LOOT":
+                boxes = msg.get("boxes", [])
+                tickets = msg.get("tickets", {})
+                for b in boxes:
+                    if b in dev.box_counts:
+                        dev.box_counts[b] += 1
+                if isinstance(tickets, dict):
+                    dev.ticket_counts["rainbow"] += int(tickets.get("rainbow", 0))
+                    dev.ticket_counts["gold"] += int(tickets.get("gold", 0))
+                print(f"🎁 [{device_id}] Mystery Box loot: Boxes={boxes}, Tickets={tickets}")
+
             elif mtype == "CAPTCHA_SOLVED":
                 odd_cards = msg.get("odd_cards", [])
                 print(f"🛡️ [{device_id}] Anti-Bot Captcha SOLVED successfully! Tapped cards: {odd_cards}")
@@ -480,17 +513,14 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                 coins = int(msg.get("coins", 0))
                 xp = int(msg.get("xp", 0))
                 boxes = msg.get("boxes", [])
+                tickets = msg.get("tickets", {})
                 
                 dev.last_round_coins = coins
                 dev.last_round_xp = xp
                 dev.session_coins += coins
                 dev.session_xp += xp
 
-                for b in boxes:
-                    if b in dev.box_counts:
-                        dev.box_counts[b] += 1
-
-                print(f"✅ [{device_id}] Round complete! Coins: +{coins}, XP: +{xp}, Boxes: {boxes}")
+                print(f"✅ [{device_id}] Round complete! Coins: +{coins}, XP: +{xp}")
 
     except WebSocketDisconnect:
         print(f"⚠️ [CloudHub] Device disconnected: {device_id}")
