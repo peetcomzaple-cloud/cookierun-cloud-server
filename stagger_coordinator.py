@@ -189,80 +189,55 @@ class StaggerCoordinator:
         return None
 
     def check_can_start_round(self, device_id: str) -> Tuple[bool, str]:
-        """
-        Start check: Immediate start allowed for all screens (no startup delay between partners).
-        Stagger separation is strictly handled via in-game first mystery box detection.
-        """
+        """Start check: Immediate start allowed for all screens."""
         partner = self.get_partner(device_id)
         if not partner:
             return True, "วิ่งเดี่ยว (ไม่มีคู่หูออนไลน์)"
-        return True, "พร้อมเริ่มวิ่งได้ทันที (จับเวลาเว้นระยะจากกล่องแรก)"
+        return True, "พร้อมเริ่มวิ่งได้ทันที (ระบบซิงค์รอหน้าสรุปผล)"
 
     async def handle_first_box_event(self, device_id: str, box_second: float) -> Optional[str]:
+        """Stats tracking only. No pause is triggered by mystery box timing anymore."""
+        dev = self.devices.get(device_id)
+        if dev:
+            dev.first_box_second = box_second
+        return None
+
+    async def notify_result_entered(self, device_id: str) -> Optional[str]:
         """
-        Called when a device collects the first mystery box.
-        Evaluates whether partner device needs to execute an intentional pause.
-        Matches original PC bot algorithm: compares wall-clock timestamps of both runners.
+        Called when a device enters GAME_COMPLETE (Result screen).
+        If its partner is currently in-game, pause the partner immediately so they don't finish simultaneously!
         """
         dev = self.devices.get(device_id)
         if not dev:
             return None
 
-        dev.first_box_second = box_second
-        dev.first_box_wall_time = time.time()
-
+        dev.in_result_screen = True
         partner = self.get_partner(device_id)
         if not partner or not partner.is_in_game:
-            return None
+            return f"📊 [Result Screen] {dev.name} เข้าสู่หน้าสรุปผล"
 
-        # Wait until both runners record their first box in this round
-        if partner.first_box_wall_time <= 0:
-            return f"📦 [First Box] {dev.name} เก็บกล่องแรกที่ {box_second:.1f}s — รอจอคู่หู ({partner.name}) เจอกล่องแรกเพื่อวัดระยะห่าง"
-
-        gap = abs(dev.first_box_wall_time - partner.first_box_wall_time)
-
-        # Dynamic user-configurable threshold & pause duration from settings (matches PC bot)
-        room_cfg = getattr(self, "room_settings", {}).get(dev.room_id, {})
-        threshold = float(dev.settings.get("box_gap_seconds") or partner.settings.get("box_gap_seconds") or room_cfg.get("box_gap_seconds", 6.0))
-        pause_duration = float(dev.settings.get("box_pause_duration") or partner.settings.get("box_pause_duration") or room_cfg.get("box_pause_duration", 5.0))
-
-        if gap >= threshold:
-            return f"✅ [Anti-Collision] ระยะห่างกล่องแรกระหว่าง {dev.name} กับ {partner.name} = {gap:.1f}s (ปลอดภัย >= {threshold:.1f}s) — ไม่ต้องหยุดชะลอ"
-
-        # Gap is too close (< threshold)! Pause the slower runner (the one that collected the box second)
-        target = dev if dev.first_box_wall_time > partner.first_box_wall_time else partner
-        if not target.has_paused_for_box:
-            target.has_paused_for_box = True
-            target.is_paused_waiting_for_partner = True
-            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรก {gap:.1f}s (< {threshold:.1f}s) ใกล้เกินไป! สั่ง {target.name} กด Pause พักจอรอคู่หูสรุปผล..."
-            if target.ws:
+        # Partner is still running in game! Pause partner to avoid collision!
+        if not partner.is_paused_waiting_for_partner:
+            partner.is_paused_waiting_for_partner = True
+            msg = f"⏱️ [Result Sync] {dev.name} ถึงหน้าสรุปผลแล้ว! สั่ง {partner.name} กด Pause พักจอรอ..."
+            print(msg)
+            if partner.ws:
                 try:
-                    await target.ws.send_json({
+                    await partner.ws.send_json({
                         "type": "COMMAND",
                         "command": "STAGGER_PAUSE",
-                        "mode": "EVENT_DRIVEN",
-                        "max_wait": 30.0,
-                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป (รอคู่หู {dev.name if target == partner else partner.name} สรุปผล)"
+                        "mode": "RESULT_SYNC",
+                        "max_wait": 40.0,
+                        "reason": f"คู่หู ({dev.name}) เข้าสู่หน้าสรุปผล — รอคู่หูกด OK"
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Error sending STAGGER_PAUSE to {partner.name}: {e}")
             return msg
-
-        return None
-
-    async def notify_result_entered(self, device_id: str) -> Optional[str]:
-        """Called when a device enters GAME_COMPLETE (Result screen)."""
-        dev = self.devices.get(device_id)
-        if dev:
-            dev.in_result_screen = True
-            partner = self.get_partner(device_id)
-            if partner:
-                return f"📊 [Result Screen] {dev.name} กำลังอยู่ในหน้าสรุปผล (คู่หู: {partner.name})"
         return None
 
     async def notify_result_finished(self, device_id: str) -> Optional[str]:
         """
-        Called when a runner finishes the Result screen (GAME_COMPLETE) and returns to Lobby.
+        Called when a runner finishes the Result screen (GAME_COMPLETE, taps OK) and returns to Lobby.
         Immediately resumes any partner that was paused waiting for this device.
         """
         dev = self.devices.get(device_id)
@@ -270,17 +245,13 @@ class StaggerCoordinator:
             return None
 
         dev.in_result_screen = False
-        dev.first_box_second = 0.0
-        dev.first_box_wall_time = 0.0
-        dev.has_paused_for_box = False
-
         partner = self.get_partner(device_id)
         if not partner:
             return None
 
         if partner.is_paused_waiting_for_partner:
             partner.is_paused_waiting_for_partner = False
-            msg = f"🟢 [Anti-Collision] {dev.name} สรุปผลเสร็จแล้ว -> ส่งสัญญาณสั่ง {partner.name} ปลด Pause วิ่งต่อทันที!"
+            msg = f"🟢 [Result Sync] {dev.name} กด OK สรุปผลเสร็จแล้ว -> สั่ง {partner.name} ปลด Pause วิ่งต่อทันที!"
             print(msg)
             if partner.ws:
                 try:
