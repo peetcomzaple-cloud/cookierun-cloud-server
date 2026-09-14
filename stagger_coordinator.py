@@ -153,7 +153,7 @@ class StaggerCoordinator:
         """Called when WebSocket closes. Immediately purges disconnected device."""
         self.remove_device(device_id)
 
-    def cleanup_stale_devices(self, max_stale_seconds: float = 8.0) -> List[str]:
+    def cleanup_stale_devices(self, max_stale_seconds: float = 120.0) -> List[str]:
         """
         Auto-prunes any devices that disconnected or haven't sent a heartbeat for > max_stale_seconds.
         Ensures dead/phantom devices disappear from the dashboard within seconds.
@@ -189,10 +189,27 @@ class StaggerCoordinator:
         return None
 
     def check_can_start_round(self, device_id: str) -> Tuple[bool, str]:
-        """Start check: Immediate start allowed for all screens."""
+        """
+        ตรวจสอบว่าอุปกรณ์สามารถเริ่มรอบใหม่ได้หรือไม่
+        หาก Stagger Mode เปิดอยู่และคู่หูยังวิ่งอยู่ในช่วง gap_seconds แรก ให้รอก่อน
+        """
+        dev = self.devices.get(device_id)
         partner = self.get_partner(device_id)
         if not partner:
             return True, "วิ่งเดี่ยว (ไม่มีคู่หูออนไลน์)"
+
+        # ดึงค่า gap_seconds จาก settings ของอุปกรณ์นี้ (หรือ partner)
+        gap_seconds = float(
+            (dev.settings if dev else {}).get("box_gap_seconds")
+            or partner.settings.get("box_gap_seconds", 0.0)
+        )
+
+        if gap_seconds > 0 and partner.is_in_game and partner.in_run_start_time > 0:
+            elapsed = time.time() - partner.in_run_start_time
+            remaining = gap_seconds - elapsed
+            if remaining > 0:
+                return False, f"⏳ รอ Gap {remaining:.1f}s ก่อนเริ่มรอบใหม่ (คู่หูวิ่งอยู่)"
+
         return True, "พร้อมเริ่มวิ่งได้ทันที (ระบบซิงค์รอหน้าสรุปผล)"
 
     async def handle_first_box_event(self, device_id: str, box_second: float) -> Optional[str]:
@@ -219,7 +236,14 @@ class StaggerCoordinator:
         # Partner is still running in game! Pause partner to avoid collision!
         if not partner.is_paused_waiting_for_partner:
             partner.is_paused_waiting_for_partner = True
-            msg = f"⏱️ [Result Sync] {dev.name} ถึงหน้าสรุปผลแล้ว! สั่ง {partner.name} กด Pause พักจอรอ..."
+            # ใช้ค่า box_pause_duration จาก settings (default 40s)
+            pause_max_wait = float(
+                dev.settings.get("box_pause_duration")
+                or partner.settings.get("box_pause_duration", 40.0)
+            )
+            if pause_max_wait <= 0:
+                pause_max_wait = 40.0
+            msg = f"⏱️ [Result Sync] {dev.name} ถึงหน้าสรุปผลแล้ว! สั่ง {partner.name} กด Pause พักจอรอ (max {pause_max_wait:.0f}s)..."
             print(msg)
             if partner.ws:
                 try:
@@ -227,7 +251,7 @@ class StaggerCoordinator:
                         "type": "COMMAND",
                         "command": "STAGGER_PAUSE",
                         "mode": "RESULT_SYNC",
-                        "max_wait": 40.0,
+                        "max_wait": pause_max_wait,
                         "reason": f"คู่หู ({dev.name}) เข้าสู่หน้าสรุปผล — รอคู่หูกด OK"
                     })
                 except Exception as e:

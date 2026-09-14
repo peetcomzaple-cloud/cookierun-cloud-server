@@ -468,7 +468,7 @@ async def ping():
 @app.get("/api/status")
 async def get_status():
     """Default status endpoint called by Web Dashboard."""
-    coordinator.cleanup_stale_devices(max_stale_seconds=8.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=120.0)
     # Pick the first active device, or fallback
     first_dev = next(iter(coordinator.devices.values()), None)
     return format_status_dict(first_dev)
@@ -477,7 +477,7 @@ async def get_status():
 @app.get("/api/instances")
 async def get_instances():
     """Returns all connected devices/instances for multi-instance selector (auto-purges stale)."""
-    coordinator.cleanup_stale_devices(max_stale_seconds=8.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=120.0)
     instances = []
     for dev_id, dev in coordinator.devices.items():
         partner = coordinator.get_partner(dev_id)
@@ -501,7 +501,7 @@ async def get_instances():
 
 @app.get("/api/instances/{device_id}/status")
 async def get_instance_status(device_id: str):
-    coordinator.cleanup_stale_devices(max_stale_seconds=8.0)
+    coordinator.cleanup_stale_devices(max_stale_seconds=120.0)
     dev = coordinator.devices.get(device_id)
     if dev is None and (device_id in ("default", "none", "emulator-5554") or len(coordinator.devices) == 1):
         dev = next(iter(coordinator.devices.values()), None)
@@ -801,12 +801,10 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
 
             elif mtype == "ROUND_START":
                 if getattr(dev, "is_user_stopped", False):
+                    # อุปกรณ์นี้ถูก Stop จาก Dashboard แล้ว — ไม่สั่ง STOP ซ้ำอีก
+                    # (เพื่อป้องกัน race condition กับ STAGGER_RESUME ที่อาจมาก่อน is_user_stopped รีเซ็ต)
                     dev.is_in_game = False
                     dev.status = "IDLE"
-                    try:
-                        await websocket.send_json({"type": "COMMAND", "command": "STOP"})
-                    except Exception:
-                        pass
                 else:
                     dev.is_in_game = True
                     dev.in_run_start_time = time.time()
