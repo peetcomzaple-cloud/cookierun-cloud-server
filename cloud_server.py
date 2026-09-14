@@ -842,8 +842,16 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                 print(f"🛡️ [{device_id}] Anti-Bot Captcha SOLVED successfully! Tapped cards: {odd_cards}")
                 dev.current_stage = f"CAPTCHA แก้ไขสำเร็จ! (การ์ด {odd_cards})"
 
+            elif mtype == "RESULT_ENTERED":
+                dev.current_stage = "GAME_COMPLETE (สรุปผล)"
+                res = await coordinator.notify_result_entered(device_id)
+                if res:
+                    print(res)
+
             elif mtype == "ROUND_COMPLETE":
                 dev.is_in_game = False
+                # Trigger Anti-Collision handshake: Resume any partner waiting for this device to finish!
+                await coordinator.notify_result_finished(device_id)
                 coins = int(msg.get("coins", 0))
                 xp = int(msg.get("xp", 0))
                 boxes = msg.get("boxes", [])

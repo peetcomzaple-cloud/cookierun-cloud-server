@@ -22,6 +22,8 @@ class CloudDeviceState:
         self.first_box_second = 0.0
         self.first_box_wall_time = 0.0
         self.has_paused_for_box = False
+        self.is_paused_waiting_for_partner = False
+        self.in_result_screen = False
         self.session_coins = 0
         self.session_xp = 0
         self.last_round_coins = 0
@@ -231,14 +233,16 @@ class StaggerCoordinator:
         target = dev if dev.first_box_wall_time > partner.first_box_wall_time else partner
         if not target.has_paused_for_box:
             target.has_paused_for_box = True
-            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรกเพียง {gap:.1f}s (< {threshold:.1f}s) ใกล้กันเกินไป! สั่ง {target.name} กด Pause ชะลอ {pause_duration:.1f}s!"
+            target.is_paused_waiting_for_partner = True
+            msg = f"⚠️ [Anti-Collision] ระยะห่างกล่องแรก {gap:.1f}s (< {threshold:.1f}s) ใกล้เกินไป! สั่ง {target.name} กด Pause พักจอรอคู่หูสรุปผล..."
             if target.ws:
                 try:
                     await target.ws.send_json({
                         "type": "COMMAND",
                         "command": "STAGGER_PAUSE",
-                        "duration": pause_duration,
-                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป (เกณฑ์: {threshold:.1f}s)"
+                        "mode": "EVENT_DRIVEN",
+                        "max_wait": 30.0,
+                        "reason": f"ระยะห่างกล่องแรก {gap:.1f}s ใกล้เกินไป (รอคู่หู {dev.name if target == partner else partner.name} สรุปผล)"
                     })
                 except Exception:
                     pass
@@ -246,5 +250,50 @@ class StaggerCoordinator:
 
         return None
 
+    async def notify_result_entered(self, device_id: str) -> Optional[str]:
+        """Called when a device enters GAME_COMPLETE (Result screen)."""
+        dev = self.devices.get(device_id)
+        if dev:
+            dev.in_result_screen = True
+            partner = self.get_partner(device_id)
+            if partner:
+                return f"📊 [Result Screen] {dev.name} กำลังอยู่ในหน้าสรุปผล (คู่หู: {partner.name})"
+        return None
+
+    async def notify_result_finished(self, device_id: str) -> Optional[str]:
+        """
+        Called when a runner finishes the Result screen (GAME_COMPLETE) and returns to Lobby.
+        Immediately resumes any partner that was paused waiting for this device.
+        """
+        dev = self.devices.get(device_id)
+        if not dev:
+            return None
+
+        dev.in_result_screen = False
+        dev.first_box_second = 0.0
+        dev.first_box_wall_time = 0.0
+        dev.has_paused_for_box = False
+
+        partner = self.get_partner(device_id)
+        if not partner:
+            return None
+
+        if partner.is_paused_waiting_for_partner:
+            partner.is_paused_waiting_for_partner = False
+            msg = f"🟢 [Anti-Collision] {dev.name} สรุปผลเสร็จแล้ว -> ส่งสัญญาณสั่ง {partner.name} ปลด Pause วิ่งต่อทันที!"
+            print(msg)
+            if partner.ws:
+                try:
+                    await partner.ws.send_json({
+                        "type": "COMMAND",
+                        "command": "STAGGER_RESUME",
+                        "reason": f"คู่หู ({dev.name}) สรุปผลเสร็จแล้ว"
+                    })
+                except Exception as e:
+                    print(f"Error sending STAGGER_RESUME to {partner.name}: {e}")
+            return msg
+        return None
+
 
 coordinator = StaggerCoordinator()
+
