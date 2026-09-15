@@ -2351,9 +2351,6 @@
 
         // Primary Stats
         let currentStageDisplay = data.current_stage || 'IDLE';
-        if (data.first_box_second && data.first_box_second > 0) {
-          currentStageDisplay += ` [📦 กล่องแรก: ${data.first_box_second}s]`;
-        }
 
         if (shouldShowDualView) {
           const cs = data.combined_stats || {};

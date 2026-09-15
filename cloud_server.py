@@ -924,7 +924,8 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
 
 @app.get("/")
 async def serve_dashboard():
-    for p in [os.path.join(WEB_DIR, "index.html"), os.path.join(BASE_DIR, "index.html")]:
+    # Priority: root index.html first (since user drags & drops to repo root on GitHub), then web/index.html
+    for p in [os.path.join(BASE_DIR, "index.html"), os.path.join(WEB_DIR, "index.html")]:
         if os.path.exists(p):
             return FileResponse(p)
     return HTMLResponse("<h2>CookieRun Cloud Server is Running. Place web files in /web directory or root.</h2>")
