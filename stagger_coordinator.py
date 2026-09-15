@@ -222,7 +222,7 @@ class StaggerCoordinator:
     async def notify_result_entered(self, device_id: str) -> Optional[str]:
         """
         Called when a device enters GAME_COMPLETE (Result screen).
-        If its partner is currently in-game, pause the partner immediately so they don't finish simultaneously!
+        Broadcasts status to partner device so if partner's HP depletes, partner will pause!
         """
         dev = self.devices.get(device_id)
         if not dev:
@@ -230,39 +230,27 @@ class StaggerCoordinator:
 
         dev.in_result_screen = True
         partner = self.get_partner(device_id)
-        if not partner or not partner.is_in_game:
+        if not partner:
             return f"📊 [Result Screen] {dev.name} เข้าสู่หน้าสรุปผล"
 
-        # Partner is still running in game! Pause partner to avoid collision!
-        if not partner.is_paused_waiting_for_partner:
-            partner.is_paused_waiting_for_partner = True
-            # ใช้ค่า box_pause_duration จาก settings (default 40s)
-            pause_max_wait = float(
-                dev.settings.get("box_pause_duration")
-                or partner.settings.get("box_pause_duration", 40.0)
-            )
-            if pause_max_wait <= 0:
-                pause_max_wait = 40.0
-            msg = f"⏱️ [Result Sync] {dev.name} ถึงหน้าสรุปผลแล้ว! สั่ง {partner.name} กด Pause พักจอรอ (max {pause_max_wait:.0f}s)..."
-            print(msg)
-            if partner.ws:
-                try:
-                    await partner.ws.send_json({
-                        "type": "COMMAND",
-                        "command": "STAGGER_PAUSE",
-                        "mode": "RESULT_SYNC",
-                        "max_wait": pause_max_wait,
-                        "reason": f"คู่หู ({dev.name}) เข้าสู่หน้าสรุปผล — รอคู่หูกด OK"
-                    })
-                except Exception as e:
-                    print(f"Error sending STAGGER_PAUSE to {partner.name}: {e}")
-            return msg
-        return None
+        msg = f"📊 [Result Screen] {dev.name} เข้าสู่หน้าสรุปผล -> ส่งสัญญาณบอกคู่หู ({partner.name})"
+        print(msg)
+        if partner.ws:
+            try:
+                await partner.ws.send_json({
+                    "type": "PARTNER_RESULT_STATUS",
+                    "in_result": True,
+                    "partner_id": dev.device_id,
+                    "reason": f"คู่หู ({dev.name}) เข้าสู่หน้าสรุปผลแล้ว"
+                })
+            except Exception as e:
+                print(f"Error sending PARTNER_RESULT_STATUS to {partner.name}: {e}")
+        return msg
 
     async def notify_result_finished(self, device_id: str) -> Optional[str]:
         """
         Called when a runner finishes the Result screen (GAME_COMPLETE, taps OK) and returns to Lobby.
-        Immediately resumes any partner that was paused waiting for this device.
+        Immediately notifies partner that result screen is cleared, and resumes if partner was paused!
         """
         dev = self.devices.get(device_id)
         if not dev:
@@ -273,21 +261,32 @@ class StaggerCoordinator:
         if not partner:
             return None
 
-        if partner.is_paused_waiting_for_partner:
-            partner.is_paused_waiting_for_partner = False
-            msg = f"🟢 [Result Sync] {dev.name} กด OK สรุปผลเสร็จแล้ว -> สั่ง {partner.name} ปลด Pause วิ่งต่อทันที!"
-            print(msg)
-            if partner.ws:
-                try:
+        msg = f"🟢 [Result Screen] {dev.name} ผ่านหน้าสรุปผลกลับสู่ Lobby -> ส่งสัญญาณบอกคู่หู ({partner.name})"
+        print(msg)
+        if partner.ws:
+            try:
+                await partner.ws.send_json({
+                    "type": "PARTNER_RESULT_STATUS",
+                    "in_result": False,
+                    "partner_id": dev.device_id,
+                    "reason": f"คู่หู ({dev.name}) กลับสู่หน้า Lobby แล้ว"
+                })
+                # If partner was paused waiting, also send STAGGER_RESUME command directly
+                if partner.is_paused_waiting_for_partner:
+                    partner.is_paused_waiting_for_partner = False
                     await partner.ws.send_json({
                         "type": "COMMAND",
                         "command": "STAGGER_RESUME",
-                        "reason": f"คู่หู ({dev.name}) สรุปผลเสร็จแล้ว"
+                        "reason": f"คู่หู ({dev.name}) สรุปผลเสร็จกลับเข้า Lobby แล้ว"
                     })
-                except Exception as e:
-                    print(f"Error sending STAGGER_RESUME to {partner.name}: {e}")
-            return msg
-        return None
+            except Exception as e:
+                print(f"Error sending resume to {partner.name}: {e}")
+        return msg
+
+    def set_device_paused_status(self, device_id: str, is_paused: bool):
+        dev = self.devices.get(device_id)
+        if dev:
+            dev.is_paused_waiting_for_partner = is_paused
 
 
 coordinator = StaggerCoordinator()

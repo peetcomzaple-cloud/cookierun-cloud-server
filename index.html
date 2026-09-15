@@ -818,9 +818,9 @@
               <label class="flex items-center justify-between cursor-pointer group">
                 <div>
                   <span class="text-xs font-semibold text-slate-200 group-hover:text-indigo-300 transition flex items-center gap-1.5">
-                    <span>⚡</span> <span>ป้องกัน 2 จอวิ่งชนกัน (ระบบรอจอแรกสรุปผลเสร็จ)</span>
+                    <span>⚡</span> <span>โหมดคู่หู (Stagger Mode)</span>
                   </span>
-                  <p class="text-[11px] text-slate-400">จอที่ช้ากว่าจะพักรอ จนกว่าจอแรกจะกดปุ่ม OK หน้าสรุปผลเสร็จ แล้วปลด Pause อัตโนมัติทันที</p>
+                  <p class="text-[11px] text-slate-400">ป้องกัน 2 จอวิ่งชนกัน รอให้อีกจอสรุปผลเสร็จก่อนเริ่มวิ่ง</p>
                 </div>
                 <input type="checkbox" id="cfg-stagger-mode" onchange="onStaggerModeToggle()" class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-0">
               </label>
@@ -836,40 +836,6 @@
                   </div>
                   <select id="cfg-stagger-partner" onchange="onStaggerPartnerChange()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1.5 text-xs text-indigo-200 focus:outline-none focus:border-indigo-400 font-mono">
                     <option value="">🌐 อัตโนมัติ (ตรวจจับทุกจอที่เปิดโหมดนี้)</option>
-                  </select>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2">
-                  <div class="space-y-1">
-                    <label class="text-[11px] font-semibold text-indigo-300 flex items-center gap-1">
-                      <span>⏱️ ระยะห่างปลอดภัย:</span>
-                    </label>
-                    <div class="relative flex items-center">
-                      <input type="number" id="cfg-box-gap-seconds" min="1" max="120" value="6" step="0.5" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400 font-mono text-center">
-                      <span class="absolute right-2 text-[10px] text-slate-400">วินาที</span>
-                    </div>
-                    <p class="text-[10px] text-slate-400">ห่างน้อยกว่านี้ = สั่งพักจอ</p>
-                  </div>
-                  <div class="space-y-1">
-                    <label class="text-[11px] font-semibold text-indigo-300 flex items-center gap-1">
-                      <span>🔄 โหมดการปลดพักจอ:</span>
-                    </label>
-                    <div class="bg-slate-900/90 border border-indigo-500/30 rounded-lg px-2 py-1 text-center">
-                      <span class="text-[11px] text-emerald-400 font-medium">รอคู่หูสรุปผลเสร็จ (Real-time)</span>
-                    </div>
-                    <p class="text-[10px] text-slate-400">ปลด Pause ทันทีเมื่อจอแรกกด OK</p>
-                  </div>
-                </div>
-
-                <div class="space-y-1">
-                  <label class="text-[11px] font-semibold text-indigo-300 flex items-center gap-1">
-                    <span>🎯 เลือกจอที่จะให้พัก (Pause Target):</span>
-                  </label>
-                  <select id="cfg-box-pause-target" onchange="saveBotSettingsAuto()" class="w-full bg-slate-900 border border-indigo-500/30 rounded-lg px-2.5 py-1 text-xs text-indigo-200 focus:outline-none focus:border-indigo-400 font-mono">
-                    <option value="slower">พักจอที่ช้ากว่า (Slower) [แนะนำ]</option>
-                    <option value="screen1">พักจอแรก (Screen 1)</option>
-                    <option value="screen2">พักจอที่สอง (Screen 2)</option>
-                    <option value="faster">พักจอที่เร็วกว่า (Faster)</option>
                   </select>
                 </div>
               </div>
@@ -1864,9 +1830,6 @@
         send_friend_lives: document.getElementById('cfg-send-lives').checked,
         stagger_mode: document.getElementById('cfg-stagger-mode').checked,
         stagger_partner_id: (document.getElementById('cfg-stagger-partner')?.value || '').trim(),
-        box_gap_seconds: parseFloat(document.getElementById('cfg-box-gap-seconds')?.value) || 6.0,
-        box_pause_duration: parseFloat(document.getElementById('cfg-box-pause-duration')?.value) || 5.0,
-        box_pause_target: document.getElementById('cfg-box-pause-target')?.value || 'slower',
         stop_goal_rounds_enabled: document.getElementById('cfg-goal-rounds-enabled').checked,
         stop_goal_rounds_target: parseInt(document.getElementById('cfg-goal-rounds-target').value) || 50,
         stop_goal_time_enabled: document.getElementById('cfg-goal-time-enabled').checked,

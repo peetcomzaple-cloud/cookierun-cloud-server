@@ -846,6 +846,15 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
                 if res:
                     print(res)
 
+            elif mtype == "STAGGER_PAUSED":
+                coordinator.set_device_paused_status(device_id, True)
+                dev.current_stage = "PAUSED (รอคู่หูสรุปผล)"
+                print(f"⏸️ [{device_id}] Stagger paused: ค้างที่หน้า Pause รอคู่หูสรุปผลเสร็จ")
+
+            elif mtype == "STAGGER_RESUMED":
+                coordinator.set_device_paused_status(device_id, False)
+                print(f"▶️ [{device_id}] Stagger resumed: ปลด Pause กดเล่นต่อเรียบร้อย")
+
             elif mtype == "ROUND_COMPLETE":
                 dev.is_in_game = False
                 # Trigger Anti-Collision handshake: Resume any partner waiting for this device to finish!
