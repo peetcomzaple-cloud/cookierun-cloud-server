@@ -112,6 +112,18 @@ class StaggerCoordinator:
                     if rem_dev.room_id not in self.rooms:
                         self.rooms[rem_dev.room_id] = []
                     self.rooms[rem_dev.room_id].append(remaining_id)
+                    if rem_dev.ws:
+                        try:
+                            asyncio.create_task(rem_dev.ws.send_json({
+                                "type": "PARTNER_RESULT_STATUS",
+                                "in_result": False
+                            }))
+                            asyncio.create_task(rem_dev.ws.send_json({
+                                "type": "COMMAND",
+                                "command": "STAGGER_RESUME"
+                            }))
+                        except Exception:
+                            pass
             if not self.rooms[old_room]:
                 del self.rooms[old_room]
 
@@ -153,9 +165,9 @@ class StaggerCoordinator:
     def remove_device(self, device_id: str):
         """Completely removes a device from registry and room assignments."""
         if device_id in self.devices:
-            dev = self.devices[device_id]
-            del self.devices[device_id]
             self._unpair(device_id)
+            if device_id in self.devices:
+                del self.devices[device_id]
 
     def unregister_device(self, device_id: str):
         """Called when WebSocket closes. Immediately purges disconnected device."""
