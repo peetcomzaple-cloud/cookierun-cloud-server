@@ -655,14 +655,13 @@ async def adjust_tickets_endpoint(req: TicketAdjustRequest, device_id: Optional[
     dev = coordinator.get_device(did)
     partner = coordinator.get_partner(did) if dev else None
 
-    if req.apply_all or (req.rainbow == 0 and req.gold == 0):
+    if req.apply_all:
         for d in coordinator.devices.values():
             d.ticket_counts["rainbow"] = max(0, req.rainbow)
             d.ticket_counts["gold"] = max(0, req.gold)
-    else:
-        if dev:
-            dev.ticket_counts["rainbow"] = max(0, req.rainbow)
-            dev.ticket_counts["gold"] = max(0, req.gold)
+    elif dev:
+        dev.ticket_counts["rainbow"] = max(0, req.rainbow)
+        dev.ticket_counts["gold"] = max(0, req.gold)
 
     return {"success": True, "message": "Tickets updated successfully"}
 
@@ -776,16 +775,16 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
             dev.last_heartbeat = time.time()
 
             if mtype == "HEARTBEAT":
-                client_status = msg.get("status", "RUNNING")
-                if client_status == "RUNNING":
-                    dev.is_user_stopped = False
-                    dev.status = "RUNNING"
-                elif getattr(dev, "is_user_stopped", False):
+                # CRITICAL: is_user_stopped is authoritative. Client heartbeats must NOT override it.
+                # Only an explicit START command from the web dashboard can clear is_user_stopped.
+                if getattr(dev, "is_user_stopped", False):
                     dev.status = "IDLE"
+                    dev.current_stage = "IDLE (Stopped)"
+                    dev.is_in_game = False
                 else:
-                    dev.status = client_status
-                dev.current_stage = "IDLE (Stopped)" if (getattr(dev, "is_user_stopped", False) and client_status != "RUNNING") else msg.get("current_stage", dev.current_stage)
-                dev.is_in_game = msg.get("is_in_game", dev.is_in_game)
+                    dev.status = msg.get("status", dev.status)
+                    dev.current_stage = msg.get("current_stage", dev.current_stage)
+                    dev.is_in_game = msg.get("is_in_game", dev.is_in_game)
                 dev.rounds_played = msg.get("rounds_played", dev.rounds_played)
 
             elif mtype == "FRAME":

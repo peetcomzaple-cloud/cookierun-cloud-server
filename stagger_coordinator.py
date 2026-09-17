@@ -211,8 +211,10 @@ class StaggerCoordinator:
             return False, f"⏳ รอคู่หู ({partner.name}) สรุปผลกลับสู่ Lobby ก่อน เพื่อป้องกันจอชนกัน"
 
         # 2. ป้องกันจอชนกัน: เว้นระยะการออกตัว (Stagger Gap) ค่าเริ่มต้น 20 วินาที
-        raw_gap = (dev.settings if dev else {}).get("box_gap_seconds") or partner.settings.get("box_gap_seconds", 20.0)
-        gap_seconds = float(raw_gap) if raw_gap is not None else 20.0
+        dev_gap = (dev.settings if dev else {}).get("box_gap_seconds")
+        partner_gap = partner.settings.get("box_gap_seconds")
+        raw_gap = dev_gap if dev_gap is not None else (partner_gap if partner_gap is not None else 20.0)
+        gap_seconds = float(raw_gap)
 
         if gap_seconds > 0 and partner.is_in_game and partner.in_run_start_time > 0:
             elapsed = time.time() - partner.in_run_start_time
