@@ -13,10 +13,10 @@ class CloudDeviceState:
         self.device_id = device_id
         self.room_id = room_id
         self.name = device_id
-        self.status = "IDLE"                  # Default to IDLE standby until user clicks Start on Web Dashboard!
-        self.is_user_stopped = True           # Standby by default
+        self.status = "RUNNING"
+        self.is_user_stopped = False
         self.is_in_game = False
-        self.current_stage = "IDLE (รอสั่งเริ่มจากเว็บ)"
+        self.current_stage = "RUNNING"
         self.rounds_played = 0
         self.in_run_start_time = 0.0
         self.first_box_second = 0.0
@@ -33,6 +33,7 @@ class CloudDeviceState:
         self.last_heartbeat = time.time()
         self.ws = None
         self.latest_frame_bytes: Optional[bytes] = None
+        self.latest_loot_image_bytes: Optional[bytes] = None
         self.round_history: List[Dict[str, Any]] = []
         self.settings: Dict[str, Any] = {}
 
@@ -53,6 +54,7 @@ class CloudDeviceState:
             "box_counts": self.box_counts,
             "ticket_counts": self.ticket_counts,
             "has_frame": self.latest_frame_bytes is not None,
+            "has_loot_image": self.latest_loot_image_bytes is not None,
             "last_seen": round(time.time() - self.last_heartbeat, 1)
         }
 
@@ -67,16 +69,22 @@ class StaggerCoordinator:
     def register_device(self, device_id: str, room_id: Optional[str] = None, ws: Any = None) -> CloudDeviceState:
         # If room_id is default_pair or not specified, put into independent single room by default
         actual_room = room_id if (room_id and room_id not in ("default_pair", "default", "none")) else f"single_{device_id}"
-        if device_id not in self.devices:
+        is_new = device_id not in self.devices
+        if is_new:
             self.devices[device_id] = CloudDeviceState(device_id, actual_room)
         
         dev = self.devices[device_id]
         dev.room_id = actual_room
         dev.ws = ws
         dev.last_heartbeat = time.time()
-        dev.status = "IDLE"                   # Default to IDLE standby upon connect!
-        dev.is_user_stopped = True            # Require explicit start from Web Dashboard
-        dev.current_stage = "IDLE (รอสั่งเริ่มจากเว็บ)"
+        # Preserve active running state across reconnects so bot is never killed by network drops!
+        if is_new:
+            dev.status = "RUNNING"
+            dev.is_user_stopped = False
+            dev.current_stage = "RUNNING"
+        else:
+            if not dev.is_user_stopped:
+                dev.status = "RUNNING"
 
         if actual_room not in self.rooms:
             self.rooms[actual_room] = []
@@ -178,39 +186,41 @@ class StaggerCoordinator:
         dev = self.devices.get(device_id)
         if not dev or not dev.room_id or dev.room_id.startswith("single_"):
             return None
-        if not dev.settings.get("stagger_mode", False):
-            return None
         room_devs = self.rooms.get(dev.room_id, [])
         for pid in room_devs:
             if pid != device_id and pid in self.devices:
                 p = self.devices[pid]
-                if p.status != "DISCONNECTED" and (time.time() - p.last_heartbeat < 15):
+                if p.status != "DISCONNECTED" and (time.time() - p.last_heartbeat < 30):
                     return p
         return None
 
     def check_can_start_round(self, device_id: str) -> Tuple[bool, str]:
         """
         ตรวจสอบว่าอุปกรณ์สามารถเริ่มรอบใหม่ได้หรือไม่
-        หาก Stagger Mode เปิดอยู่และคู่หูยังวิ่งอยู่ในช่วง gap_seconds แรก ให้รอก่อน
+        ระบบ Lobby Gate Anti-Collision:
+        1. หากคู่หูกำลังอยู่ในหน้าสรุปผล (Result Screen / Mystery Box) ให้รอก่อนเพื่อไม่ให้ชนกัน
+        2. หากคู่หูเพิ่งเริ่มวิ่ง ให้เว้นระยะห่าง (Stagger Gap) อย่างน้อย 20 วินาที
         """
         dev = self.devices.get(device_id)
         partner = self.get_partner(device_id)
         if not partner:
             return True, "วิ่งเดี่ยว (ไม่มีคู่หูออนไลน์)"
 
-        # ดึงค่า gap_seconds จาก settings ของอุปกรณ์นี้ (หรือ partner)
-        gap_seconds = float(
-            (dev.settings if dev else {}).get("box_gap_seconds")
-            or partner.settings.get("box_gap_seconds", 0.0)
-        )
+        # 1. ป้องกันจอชนกัน: ถ้าคู่หูกำลังสรุปผลอยู่ ให้รอก่อนจนกว่าคู่หูจะผ่านหน้าสรุปผลกลับเข้าล็อบบี้
+        if getattr(partner, "in_result_screen", False) or partner.current_stage in ("GAME_COMPLETE", "GAME_COMPLETE (สรุปผล)", "MYSTERY_BOX"):
+            return False, f"⏳ รอคู่หู ({partner.name}) สรุปผลกลับสู่ Lobby ก่อน เพื่อป้องกันจอชนกัน"
+
+        # 2. ป้องกันจอชนกัน: เว้นระยะการออกตัว (Stagger Gap) ค่าเริ่มต้น 20 วินาที
+        raw_gap = (dev.settings if dev else {}).get("box_gap_seconds") or partner.settings.get("box_gap_seconds", 20.0)
+        gap_seconds = float(raw_gap) if raw_gap is not None else 20.0
 
         if gap_seconds > 0 and partner.is_in_game and partner.in_run_start_time > 0:
             elapsed = time.time() - partner.in_run_start_time
             remaining = gap_seconds - elapsed
             if remaining > 0:
-                return False, f"⏳ รอ Gap {remaining:.1f}s ก่อนเริ่มรอบใหม่ (คู่หูวิ่งอยู่)"
+                return False, f"⏳ เว้นระยะห่าง (Stagger Gap) {remaining:.1f}s ก่อนเริ่มวิ่ง"
 
-        return True, "พร้อมเริ่มวิ่งได้ทันที (ระบบซิงค์รอหน้าสรุปผล)"
+        return True, f"พร้อมเริ่มวิ่งได้ทันที (จับคู่ห้อง: {dev.room_id})"
 
     async def handle_first_box_event(self, device_id: str, box_second: float) -> Optional[str]:
         """Stats tracking only. No pause is triggered by mystery box timing anymore."""

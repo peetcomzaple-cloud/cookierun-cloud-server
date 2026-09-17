@@ -714,6 +714,14 @@ async def get_device_frame(device_id: Optional[str] = None):
     return Response(content=content, media_type="image/jpeg")
 
 
+@app.get("/api/loot_image")
+@app.get("/api/instances/{device_id}/loot_image")
+async def get_device_loot_image(device_id: Optional[str] = None):
+    dev = coordinator.devices.get(device_id) if (device_id and device_id not in ("default", "none")) else next(iter(coordinator.devices.values()), None)
+    content = dev.latest_loot_image_bytes if (dev and dev.latest_loot_image_bytes) else PLACEHOLDER_JPEG
+    return Response(content=content, media_type="image/jpeg")
+
+
 async def frame_stream_generator(device_id: Optional[str] = None):
     """Yields ultra-smooth, high-frequency MJPEG stream from latest frames received from Redfinger."""
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
@@ -768,12 +776,16 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
             dev.last_heartbeat = time.time()
 
             if mtype == "HEARTBEAT":
-                if getattr(dev, "is_user_stopped", False):
+                client_status = msg.get("status", "RUNNING")
+                if client_status == "RUNNING":
+                    dev.is_user_stopped = False
+                    dev.status = "RUNNING"
+                elif getattr(dev, "is_user_stopped", False):
                     dev.status = "IDLE"
                 else:
-                    dev.status = msg.get("status", dev.status)
-                dev.current_stage = "IDLE (Stopped)" if getattr(dev, "is_user_stopped", False) else msg.get("current_stage", dev.current_stage)
-                dev.is_in_game = False if getattr(dev, "is_user_stopped", False) else msg.get("is_in_game", dev.is_in_game)
+                    dev.status = client_status
+                dev.current_stage = "IDLE (Stopped)" if (getattr(dev, "is_user_stopped", False) and client_status != "RUNNING") else msg.get("current_stage", dev.current_stage)
+                dev.is_in_game = msg.get("is_in_game", dev.is_in_game)
                 dev.rounds_played = msg.get("rounds_played", dev.rounds_played)
 
             elif mtype == "FRAME":
@@ -801,8 +813,6 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
 
             elif mtype == "ROUND_START":
                 if getattr(dev, "is_user_stopped", False):
-                    # อุปกรณ์นี้ถูก Stop จาก Dashboard แล้ว — ไม่สั่ง STOP ซ้ำอีก
-                    # (เพื่อป้องกัน race condition กับ STAGGER_RESUME ที่อาจมาก่อน is_user_stopped รีเซ็ต)
                     dev.is_in_game = False
                     dev.status = "IDLE"
                 else:
@@ -823,6 +833,12 @@ async def device_websocket_endpoint(websocket: WebSocket, device_id: str, room_i
             elif mtype == "BOX_LOOT":
                 boxes = msg.get("boxes", [])
                 tickets = msg.get("tickets", {})
+                loot_img_b64 = msg.get("loot_image")
+                if loot_img_b64:
+                    try:
+                        dev.latest_loot_image_bytes = base64.b64decode(loot_img_b64)
+                    except Exception:
+                        pass
                 for b in boxes:
                     b_str = str(b).lower().strip()
                     if b_str in dev.box_counts:
